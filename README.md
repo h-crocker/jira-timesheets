@@ -55,8 +55,13 @@ A week with its own allocations **replaces** Jira's automatic worklogs: the plan
 through in the preview) and allocations fill the whole week. Before deleting them, the sync saves a copy in
 a Jira user property on your account (`jira-timesheets.replaced.<Monday's date>`), so pressing the button
 again later still counts them. Anything else you logged that isn't leave or a recurring meeting is treated
-the same way. The app's own worklogs are re-planned if the week's allocations change, and syncing twice
-changes nothing. Weeks using your usual allocations keep existing worklogs as they are.
+the same way. Weeks using your usual allocations keep the worklogs you or Jira logged as they are.
+
+In every week, the app's own worklogs follow your allocations: change them, even after the week has been
+synced, and the preview shows the worklogs being moved at once (the old ones struck through), so it always
+shows what the sync will do. Syncing twice changes nothing. Allocations adding up to more than 100% share
+the week in proportion (adding 20% to a week filled to 100% gives it 20 parts in 120), and ones adding up to
+less leave the rest of the week empty; the **Allocations** section says which.
 
 **Jira keys** come from the pull request title (a leading key first), then Jira links and keys in the
 description, then the branch name. Keys are checked against Jira. A pull request with no valid key goes to
@@ -86,8 +91,9 @@ npm run build
 - `TimesheetEngineService`: pure function from settings and existing worklogs to an execution plan
   (creations, deletions, and the worklogs to remember before deleting). Recurring events win over clashing
   worklogs, leave (`leave-planner.ts`) wins over both, and allocations fill the rest in 15-minute blocks
-  (any block left over by rounding goes to the largest allocation, so 100% fills every free block). A week with its own
-  allocations replaces the automatic worklogs instead. Either way, a second sync changes nothing.
+  (any block left over by rounding goes to the largest allocation, so 100% fills every free block, and over 100% is
+  shared in proportion). The app's own worklogs are re-planned whenever the settings no longer produce them. A week
+  with its own allocations replaces the automatic worklogs too. Either way, a second sync changes nothing.
 - `activity-allocations.ts`: pure functions from a week's evidence to its allocations.
 - `SettingsService` / `JiraIntegrationService`: `localStorage` persistence and the `jira.js` client, routed
   through the dev-server relay in the running app. Every worklog the app creates carries a

@@ -53,7 +53,8 @@ function freeWeekGaps(
  * Shares `remaining` seconds of free time between the allocations in 15-minute blocks, in order
  * from the start of the week. Each allocation's share is rounded down to whole blocks and the
  * blocks that rounding leaves over go to the largest allocation, so allocations adding up to 100%
- * fill every free block.
+ * fill every free block. Allocations adding up to more than 100% share the week in proportion, so
+ * every one of them gets its part.
  */
 function fillAllocations(
   allocations: PercentageAllocation[],
@@ -64,7 +65,11 @@ function fillAllocations(
     gaps.reduce((sum, { blocks }) => sum + blocks, 0),
     Math.floor(remaining / BLOCK_SECONDS),
   );
-  const exact = allocations.map((allocation) => (available * allocation.percentage) / 100);
+  const whole = Math.max(
+    100,
+    allocations.reduce((sum, allocation) => sum + allocation.percentage, 0),
+  );
+  const exact = allocations.map((allocation) => (available * allocation.percentage) / whole);
   const blocks = exact.map((share) => Math.floor(share + 1e-9));
   const total = Math.min(
     available,
@@ -109,12 +114,12 @@ function fillAllocations(
 export class TimesheetEngineService {
   /**
    * Recurring events win over clashing worklogs, leave wins over both, and allocations fill the
-   * rest of the week.
+   * rest of the week. The app's own worklogs stay only while the settings still produce them, so a
+   * change to the allocations shows in the plan even once the week has been synced.
    *
    * A week whose allocations were filled from activity (`settings.weekAllocations`) uses those and
    * replaces what Jira logged automatically: every worklog that isn't the app's own, leave or a
-   * recorded recurring event is deleted, and the app's own worklogs stay only while the allocations
-   * still produce them. Either way, syncing twice changes nothing.
+   * recorded recurring event is deleted. Either way, syncing twice changes nothing.
    */
   computePlan(input: EngineInput): ExecutionPlan {
     const { weekStart, settings } = input;
@@ -144,7 +149,7 @@ export class TimesheetEngineService {
         continue;
       }
       const jiraEvent = toEvent(worklog);
-      if (replacing && worklog.generated) {
+      if (worklog.generated) {
         replaceable.push(worklog);
       } else if (replacing) {
         deletions.push({
@@ -193,7 +198,7 @@ export class TimesheetEngineService {
     const allocated =
       remaining > 0 ? fillAllocations(allocations, freeWeekGaps(input, occupied), remaining) : [];
 
-    // When replacing, the app's own worklogs that match the fill stay; the rest go.
+    // The app's own worklogs that match the fill stay; the rest go.
     const kept = new Set<string>();
     for (const want of allocated) {
       const existing = replaceable.find(

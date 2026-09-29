@@ -37,6 +37,24 @@ function worklog(id: string, started: Date, timeSpentSeconds: number, issueKey =
   return { id, issueKey, started, timeSpentSeconds, generated: false };
 }
 
+/** A worklog this app created. */
+function ours(id: string, started: Date, timeSpentSeconds: number, issueKey: string): JiraWorklog {
+  return { ...worklog(id, started, timeSpentSeconds, issueKey), generated: true };
+}
+
+let synced = 0;
+
+/** The week's worklogs once `plan` has been synced. */
+function applied(worklogs: JiraWorklog[], plan: ExecutionPlan): JiraWorklog[] {
+  const deleted = new Set(plan.deletions.map((deletion) => deletion.worklogId));
+  return [
+    ...worklogs.filter((entry) => !deleted.has(entry.id)),
+    ...plan.creations.map((creation) =>
+      ours(`new-${synced++}`, new Date(creation.started), creation.timeSpentSeconds, creation.issueKey),
+    ),
+  ];
+}
+
 function input(overrides: Partial<EngineInput> = {}): EngineInput {
   return { weekStart: monday(), settings: defaultSettings(), worklogs: [], ...overrides };
 }
@@ -467,6 +485,51 @@ describe('TimesheetEngineService', () => {
     ]);
   });
 
+  it('shares the week in proportion when the allocations add up to more than 100%', () => {
+    const settings = defaultSettings({
+      workDays: [1],
+      allocations: [
+        { id: 'a1', issueKey: 'GWP-7', summary: 'First', percentage: 100 },
+        { id: 'a2', issueKey: 'GWP-8', summary: 'Added', percentage: 50 },
+      ],
+    });
+
+    const plan = engine.computePlan(input({ settings }));
+
+    // 30 blocks shared 100:50, so the allocation added last still gets its third.
+    expect(plan.creations.map((creation) => [creation.issueKey, creation.timeSpentSeconds / 900])).toEqual([
+      ['GWP-7', 20],
+      ['GWP-8', 10],
+    ]);
+  });
+
+  it("re-plans its own worklogs when the allocations change after a sync, and keeps everyone else's", () => {
+    const settings = defaultSettings({
+      allocations: [{ id: 'a1', issueKey: 'GWP-9', summary: 'Allocation', percentage: 100 }],
+    });
+    const byHand = worklog('hand', at(1, 14), 3600, 'GWP-3');
+    const synced = applied([byHand], engine.computePlan(input({ settings, worklogs: [byHand] })));
+    expect(engine.computePlan(input({ settings, worklogs: synced }))).toEqual({ deletions: [], creations: [], absorb: [] });
+
+    const changed = defaultSettings({
+      allocations: [
+        { id: 'a1', issueKey: 'GWP-9', summary: 'Allocation', percentage: 50 },
+        { id: 'a2', issueKey: 'GWP-10', summary: 'New project', percentage: 50 },
+      ],
+    });
+    const replan = engine.computePlan(input({ settings: changed, worklogs: synced }));
+
+    // Monday and Tuesday are still GWP-9's; Wednesday is split, and Thursday and Friday move to GWP-10.
+    expect(replan.deletions.map((deletion) => deletion.reason)).toEqual(Array(3).fill('stale-generated'));
+    expect(replan.absorb).toEqual([]);
+    const after = applied(synced, replan);
+    const total = (issueKey: string) =>
+      after.filter((entry) => entry.issueKey === issueKey).reduce((sum, entry) => sum + entry.timeSpentSeconds, 0);
+    expect(after).toContainEqual(byHand);
+    expect([total('GWP-9'), total('GWP-10')]).toEqual([73 * 900, 73 * 900]);
+    expect(engine.computePlan(input({ settings: changed, worklogs: after }))).toEqual({ deletions: [], creations: [], absorb: [] });
+  });
+
   describe('for a week with allocations filled from activity', () => {
     const weekAllocations = {
       '2026-09-28': [
@@ -475,20 +538,6 @@ describe('TimesheetEngineService', () => {
       ],
     };
     const usual = [{ id: 'u', issueKey: 'GWP-9', summary: 'Usual', percentage: 100 }];
-    const ours = (id: string, started: Date, seconds: number, issueKey: string) => ({
-      ...worklog(id, started, seconds, issueKey),
-      generated: true,
-    });
-
-    function applied(worklogs: JiraWorklog[], plan: ExecutionPlan): JiraWorklog[] {
-      const deleted = new Set(plan.deletions.map((deletion) => deletion.worklogId));
-      return [
-        ...worklogs.filter((entry) => !deleted.has(entry.id)),
-        ...plan.creations.map((creation, index) =>
-          ours(`new-${index}`, new Date(creation.started), creation.timeSpentSeconds, creation.issueKey),
-        ),
-      ];
-    }
 
     it("uses the week's own allocations, and only for that week", () => {
       const settings = defaultSettings({ allocations: usual, weekAllocations });

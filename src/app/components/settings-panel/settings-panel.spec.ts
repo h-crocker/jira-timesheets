@@ -188,6 +188,30 @@ describe('SettingsPanelComponent', () => {
     );
   });
 
+  it("says what the allocations add up to when it isn't 100%", () => {
+    const fixture = create();
+    expect(q(fixture, 'allocations-total').textContent).toContain(
+      'These add up to 75%, so part of the week is left empty.',
+    );
+
+    fixture.componentRef.setInput('weekAllocations', [
+      { id: 'b1', issueKey: 'GWP-7', summary: 'Filled', percentage: 100 },
+      { id: 'b2', issueKey: 'GWP-8', summary: 'Added', percentage: 20 },
+    ]);
+    fixture.detectChanges();
+    expect(q(fixture, 'allocations-total').textContent).toContain(
+      'These add up to 120%, so each gets its share of the week in proportion.',
+    );
+
+    fixture.componentRef.setInput('weekAllocations', [
+      { id: 'c1', issueKey: 'GWP-7', summary: 'Third', percentage: 33.3 },
+      { id: 'c2', issueKey: 'GWP-8', summary: 'Third', percentage: 33.3 },
+      { id: 'c3', issueKey: 'GWP-9', summary: 'Third', percentage: 33.4 },
+    ]);
+    fixture.detectChanges();
+    expect(q(fixture, 'allocations-total')).toBeNull();
+  });
+
   it('emits fillFromActivity and useUsualAllocations, and disables filling while busy', () => {
     const fixture = create();
     fixture.componentRef.setInput('weekAllocations', []);

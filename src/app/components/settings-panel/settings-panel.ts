@@ -76,6 +76,15 @@ export class SettingsPanelComponent {
     return this.weekAllocations() ?? this.settings().allocations;
   }
 
+  /** What the allocations on show add up to, in percent. */
+  protected allocationTotal(): number {
+    const total = this.shownAllocations().reduce(
+      (sum, allocation) => sum + allocation.percentage,
+      0,
+    );
+    return Math.round(total * 100) / 100;
+  }
+
   protected effectiveStartTime(): string {
     return this.startTime() ?? this.settings().startTime;
   }

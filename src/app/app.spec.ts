@@ -177,6 +177,50 @@ describe('App (smart component)', () => {
     expect(totalSeconds).toBe(5 * 7.5 * 3600 - loggedSeconds);
   });
 
+  it('shows a change to the allocations in the preview once the week has been synced', async () => {
+    const fixture = await create((settings) =>
+      settings.addAllocation({ id: 'a', issueKey: 'GWP-200', summary: 'Project', percentage: 100 }),
+    );
+    await settle(fixture);
+    q(fixture, 'sync').click();
+    await settle(fixture);
+    expect(q(fixture, 'plan-summary').textContent).toContain('0 to create, 0 to delete');
+
+    q(fixture, 'remove-allocation-a').click();
+    const type = (id: string, value: string) => {
+      const field = q(fixture, id) as HTMLInputElement;
+      field.value = value;
+      field.dispatchEvent(new Event('input'));
+    };
+    type('alloc-issue-key', 'GWP-300');
+    type('alloc-summary', 'New project');
+    type('alloc-percentage', '100');
+    q(fixture, 'allocation-form').dispatchEvent(new Event('submit', { cancelable: true }));
+    await settle(fixture);
+
+    // The worklogs the sync logged for GWP-200 are struck through, and GWP-300 takes their place.
+    const old = rowsFor(fixture, 'GWP-200');
+    expect(old.length).toBeGreaterThan(0);
+    expect(old.every((row) => row.getAttribute('data-pending-deletion') === 'true')).toBe(true);
+    const added = rowsFor(fixture, 'GWP-300');
+    expect(added.length).toBeGreaterThan(0);
+    expect(
+      added.every(
+        (row) => row.querySelector('.source-badge')?.getAttribute('data-source') === 'allocated',
+      ),
+    ).toBe(true);
+    // Jira's automatic worklogs and the ones logged by hand stay.
+    expect(root(fixture).querySelectorAll('[data-pending-deletion]').length).toBe(old.length);
+    expect((q(fixture, 'sync') as HTMLButtonElement).disabled).toBe(false);
+
+    q(fixture, 'sync').click();
+    await settle(fixture);
+    const keys = fixture.componentInstance.worklogs().map((worklog) => worklog.issueKey);
+    expect(keys).toContain('GWP-300');
+    expect(keys).not.toContain('GWP-200');
+    expect(q(fixture, 'plan-summary').textContent).toContain('0 to create, 0 to delete');
+  });
+
   it('week navigation changes the displayed week and events', async () => {
     const fixture = await create((settings) =>
       settings.addSchedule({
@@ -502,6 +546,38 @@ describe('App (smart component)', () => {
         'GWP-9',
       ]);
       expect(q(fixture, 'allocation-activity-GWP-2070')).toBeTruthy();
+    });
+
+    it('shows an allocation added to a filled week in the preview', async () => {
+      const fixture = await setUp(withGithub);
+      await fill(fixture);
+      const before = fixture.componentInstance.plan().creations;
+      expect(before.some((creation) => creation.issueKey === 'GWP-1999')).toBe(false);
+
+      const type = (id: string, value: string) => {
+        const field = q(fixture, id) as HTMLInputElement;
+        field.value = value;
+        field.dispatchEvent(new Event('input'));
+      };
+      type('alloc-issue-key', 'GWP-1999');
+      type('alloc-summary', 'Design');
+      type('alloc-percentage', '20');
+      q(fixture, 'allocation-form').dispatchEvent(new Event('submit', { cancelable: true }));
+      await settle(fixture);
+
+      // The filled allocations already add up to 100%, so the added one takes 20 parts in 120.
+      expect(q(fixture, 'allocations-total').textContent).toContain('add up to 120%');
+      const added = rowsFor(fixture, 'GWP-1999');
+      expect(added.length).toBeGreaterThan(0);
+      const creations = fixture.componentInstance.plan().creations;
+      const seconds = (issueKey: string) =>
+        creations
+          .filter((creation) => creation.issueKey === issueKey)
+          .reduce((sum, creation) => sum + creation.timeSpentSeconds, 0);
+      const allocated = creations
+        .filter((creation) => creation.source === 'allocated')
+        .reduce((sum, creation) => sum + creation.timeSpentSeconds, 0);
+      expect(seconds('GWP-1999') / allocated).toBeCloseTo(20 / 120, 2);
     });
 
     it('fills from Jira alone without GitHub, and says so', async () => {
