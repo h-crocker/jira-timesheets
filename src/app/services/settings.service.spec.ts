@@ -11,6 +11,7 @@ const DEFAULTS = {
   workDays: [1, 2, 3, 4, 5],
   allocations: [],
   schedules: [],
+  spreadPrefixes: ['MT'],
   weekAllocations: {},
   leaveIssueKey: '',
   placeholderIssueKey: '',
@@ -186,6 +187,17 @@ describe('SettingsService', () => {
       githubOrgs: ['acme'],
       weekAllocations: { '2026-09-28': [ALLOCATION] },
     });
+  });
+
+  it('loads the scattered ticket prefixes, keeping MT when they were never saved', () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ spreadPrefixes: ['OPS', 7, 'MT-'] }));
+    expect(new SettingsService().settings().spreadPrefixes).toEqual(['OPS', 'MT-']);
+
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ spreadPrefixes: [] }));
+    expect(new SettingsService().settings().spreadPrefixes).toEqual([]);
+
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ startTime: '08:00' }));
+    expect(new SettingsService().settings().spreadPrefixes).toEqual(['MT']);
   });
 
   it("sets and clears one week's allocations, leaving the others", () => {

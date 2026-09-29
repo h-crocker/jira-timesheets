@@ -61,21 +61,62 @@ function freeSessions(input: EngineInput, occupied: Interval[]): FreeGap[][] {
     .filter((session) => session.length > 0);
 }
 
+/** A 32-bit FNV-1a hash of `text`, to seed the week's scattering. */
+function hash(text: string): number {
+  let value = 0x811c9dc5;
+  for (let index = 0; index < text.length; index++) {
+    value = Math.imul(value ^ text.charCodeAt(index), 0x01000193);
+  }
+  return value >>> 0;
+}
+
+/** A small seeded random number generator (mulberry32), giving numbers in [0, 1). */
+function random(seed: number): () => number {
+  let state = seed;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let value = Math.imul(state ^ (state >>> 15), 1 | state);
+    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Whether an allocation on `issueKey` is scattered through the week rather than logged in a block. */
+export function isSpread(issueKey: string, spreadPrefixes: string[]): boolean {
+  const key = issueKey.trim().toUpperCase();
+  return spreadPrefixes.some((prefix) => {
+    const wanted = prefix.trim().toUpperCase();
+    return wanted !== '' && key.startsWith(wanted);
+  });
+}
+
+/** One free 15-minute block of the week. */
+interface Slot {
+  gap: Interval;
+  /** Blocks from the start of the gap. */
+  offset: number;
+  session: number;
+}
+
 /**
  * Shares `remaining` seconds of free time between the allocations in 15-minute blocks. Each
  * allocation's share is rounded down to whole blocks and the blocks that rounding leaves over go
  * to the largest allocation, so allocations adding up to 100% fill every free block. Allocations
  * adding up to more than 100% share the week in proportion, so every one of them gets its part.
+ * Time left unallocated is left empty at the end of each morning and afternoon, in proportion.
  *
- * Every morning and afternoon gets its part of each allocation's share, one after the other in
- * the order of the allocations, so a 10% allocation is logged 15 to 30 minutes at a time all
- * through the week rather than in one go. Time left unallocated is spread the same way, at the
- * end of each morning and afternoon.
+ * Allocations on issues starting with one of `spreadPrefixes` are scattered through the week:
+ * each of their blocks lands somewhere random in its own equal part of the week, so they turn up
+ * a little at a time all week long. The scattering is seeded from `seed`, so the same week plans
+ * the same way every time and syncing twice changes nothing. Every other allocation is logged in
+ * one block in the order of the allocations, so one task follows another through the week.
  */
 function fillAllocations(
   allocations: PercentageAllocation[],
   sessions: FreeGap[][],
   remaining: number,
+  spreadPrefixes: string[],
+  seed: string,
 ): WorklogCreation[] {
   const room = (session: FreeGap[]) => session.reduce((sum, { blocks }) => sum + blocks, 0);
   const available = Math.min(
@@ -101,56 +142,115 @@ function fillAllocations(
     blocks[largest] += Math.max(0, total - blocks.reduce((sum, count) => sum + count, 0));
   }
 
-  // The week's blocks in the order Webster's method hands them out: the next goes to the share
-  // with the most blocks per (2 × blocks given so far + 1), ties in allocation order. Any stretch
-  // of this order holds close to each share's part of it, so cutting it into sessions spreads
-  // every share evenly through the week. Unallocated time is the last share.
-  const shares = [...blocks, available - total];
-  const order = shares
-    .flatMap((count, owner) =>
-      Array.from({ length: Math.max(0, count) }, (_, given) => ({ owner, given })),
+  // The week's free blocks in order, then the ones left unallocated taken out: they are the end
+  // of each morning and afternoon, each session giving up its part of them (Webster's method,
+  // which keeps every stretch of the week close to its share).
+  const slots: Slot[] = sessions
+    .flatMap((session, index) =>
+      session.flatMap(({ gap, blocks: count }) =>
+        Array.from({ length: count }, (_, offset) => ({ gap, offset, session: index })),
+      ),
     )
+    .slice(0, available);
+  const shares = [total, available - total];
+  const order = shares
+    .flatMap((count, owner) => Array.from({ length: count }, (_, given) => ({ owner, given })))
     .sort(
       (a, b) =>
         (2 * a.given + 1) * shares[b.owner] - (2 * b.given + 1) * shares[a.owner] ||
         a.owner - b.owner,
     );
-
-  const creations: WorklogCreation[] = [];
+  const timeline: Slot[] = [];
   let next = 0;
-  for (const session of sessions) {
-    const counts = shares.map(() => 0);
-    for (const { owner } of order.slice(next, next + room(session))) {
-      counts[owner]++;
-    }
-    next += room(session);
+  sessions.forEach((session, index) => {
+    const mine = slots.filter((slot) => slot.session === index);
+    const empty = order.slice(next, next + mine.length).filter(({ owner }) => owner === 1).length;
+    next += mine.length;
+    timeline.push(...mine.slice(0, mine.length - empty));
+  });
 
-    let gapIndex = 0;
-    let used = 0;
-    counts.forEach((count, owner) => {
-      let left = count;
-      while (left > 0 && gapIndex < session.length) {
-        const { gap, blocks: gapBlocks } = session[gapIndex];
-        const take = Math.min(left, gapBlocks - used);
-        const allocation = allocations[owner];
-        if (allocation !== undefined) {
-          creations.push({
-            issueKey: allocation.issueKey,
-            started: new Date(gap.start.getTime() + used * BLOCK_SECONDS * 1000).toISOString(),
-            timeSpentSeconds: take * BLOCK_SECONDS,
-            comment: allocation.summary,
-            source: 'allocated',
-          });
-        }
-        left -= take;
-        used += take;
-        if (used === gapBlocks) {
-          gapIndex++;
-          used = 0;
-        }
+  // Scattered allocations pick their blocks first, each from its own part of the week; the rest
+  // take what is left, one after another.
+  const owners: (number | undefined)[] = timeline.map(() => undefined);
+  const spread = allocations.map((allocation) => isSpread(allocation.issueKey, spreadPrefixes));
+  const pick = random(hash(`${seed}|${allocations.map((allocation) => allocation.id).join(',')}`));
+  const free = (from: number, to: number) => {
+    const indexes: number[] = [];
+    for (let index = from; index < to; index++) {
+      if (owners[index] === undefined) {
+        indexes.push(index);
       }
-    });
-  }
+    }
+    return indexes;
+  };
+  allocations.forEach((_, owner) => {
+    const count = blocks[owner];
+    if (!spread[owner] || count <= 0) {
+      return;
+    }
+    for (let part = 0; part < count; part++) {
+      const from = Math.floor((part * total) / count);
+      const to = Math.floor(((part + 1) * total) / count);
+      let candidates = free(from, to);
+      if (candidates.length === 0) {
+        const middle = (from + to) / 2;
+        candidates = free(0, total).sort(
+          (a, b) => Math.abs(a - middle) - Math.abs(b - middle) || a - b,
+        );
+        candidates = candidates.slice(0, 1);
+      }
+      owners[candidates[Math.floor(pick() * candidates.length)]] = owner;
+    }
+  });
+  let cursor = 0;
+  allocations.forEach((_, owner) => {
+    let left = spread[owner] ? 0 : blocks[owner];
+    while (left > 0 && cursor < total) {
+      if (owners[cursor] === undefined) {
+        owners[cursor] = owner;
+        left--;
+      }
+      cursor++;
+    }
+  });
+
+  // Consecutive blocks of the same allocation in the same gap make one worklog.
+  const creations: WorklogCreation[] = [];
+  let run: { owner: number; gap: Interval; offset: number; blocks: number } | null = null;
+  const flush = () => {
+    if (run !== null) {
+      const allocation = allocations[run.owner];
+      creations.push({
+        issueKey: allocation.issueKey,
+        started: new Date(
+          run.gap.start.getTime() + run.offset * BLOCK_SECONDS * 1000,
+        ).toISOString(),
+        timeSpentSeconds: run.blocks * BLOCK_SECONDS,
+        comment: allocation.summary,
+        source: 'allocated',
+      });
+    }
+    run = null;
+  };
+  timeline.forEach((slot, index) => {
+    const owner = owners[index];
+    if (owner === undefined) {
+      flush();
+      return;
+    }
+    if (
+      run !== null &&
+      run.owner === owner &&
+      run.gap === slot.gap &&
+      run.offset + run.blocks === slot.offset
+    ) {
+      run.blocks++;
+    } else {
+      flush();
+      run = { owner, gap: slot.gap, offset: slot.offset, blocks: 1 };
+    }
+  });
+  flush();
   return creations;
 }
 
@@ -240,7 +340,15 @@ export class TimesheetEngineService {
     const remaining = totalWeekCapacitySeconds - occupiedSeconds;
 
     const allocated =
-      remaining > 0 ? fillAllocations(allocations, freeSessions(input, occupied), remaining) : [];
+      remaining > 0
+        ? fillAllocations(
+            allocations,
+            freeSessions(input, occupied),
+            remaining,
+            settings.spreadPrefixes,
+            weekKey(weekStart),
+          )
+        : [];
 
     // The app's own worklogs that match the fill stay; the rest go.
     const kept = new Set<string>();

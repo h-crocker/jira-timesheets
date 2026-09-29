@@ -22,6 +22,7 @@ function settings(overrides: Partial<UserSettings> = {}): UserSettings {
     workDays: [1, 2, 3, 4, 5],
     allocations: [],
     schedules: [],
+    spreadPrefixes: [],
     weekAllocations: {},
     leaveIssueKey: 'HR-1',
     placeholderIssueKey: '',

@@ -47,10 +47,20 @@ hour by default) after the first half: 7.5 hours from 09:00 is 09:00–12:45 and
 counted in the hours; set it to 0 for no break. Anything logged on a day counts toward its hours, even over
 lunch or after hours, so a day never adds up to more than its hours.
 
-Recurring meetings and leave go in first, and your allocations share out the rest. Every morning and
-afternoon gets its part of each allocation, one after the other, so each allocation is logged a little at a
-time all through the week: a 10% allocation takes 15 to 30 minutes each morning and afternoon. To change an
-allocation's percentage, edit the number next to it in the **Allocations** section.
+Recurring meetings and leave go in first, and your allocations share out the rest. A schedule can repeat
+**every week**, **every other week** (from the week of a date you pick, the week on show by default) or
+**monthly**, on the 1st, 2nd, 3rd, 4th or last of its ticked weekdays each month. Where two recurring events
+overlap on a day, only one is logged: the longer, or of equally long ones the one further down the
+**Schedules** list. The other neither appears nor takes any of the day's hours, so the allocations get the
+time instead.
+
+Allocations are logged in blocks, one after another in the order of the **Allocations** list, so the week
+reads as one task followed by the next. Allocations on tickets that start with one of the prefixes in
+**Scatter tickets starting with** (`MT` by default; several are separated by commas, and the match ignores
+case) are instead scattered through the week, 15 to 30 minutes at a time, so a support ticket turns up a
+little every day. The scattering is random but fixed for the week, so the preview and the sync agree and
+syncing twice changes nothing. Time left unallocated is left empty at the end of each morning and afternoon.
+To change an allocation's percentage, edit the number next to it in the **Allocations** section.
 
 ## Filling allocations from your activity
 
@@ -106,13 +116,16 @@ npm run build
 ## Architecture
 
 - `TimesheetEngineService`: pure function from settings and existing worklogs to an execution plan
-  (creations, deletions, and the worklogs to remember before deleting). Recurring events win over clashing
-  worklogs, leave (`leave-planner.ts`) wins over both, and allocations fill the rest in 15-minute blocks
-  (any block left over by rounding goes to the largest allocation, so 100% fills every free block, and over 100% is
-  shared in proportion). Each allocation's blocks are handed out in Webster order and cut into sessions, the
-  mornings and afternoons either side of lunch (`schedule-time.ts`), so every session gets its part of every
-  allocation. The app's own worklogs are re-planned whenever the settings no longer produce them. A week
-  with its own allocations replaces the automatic worklogs too. Either way, a second sync changes nothing.
+  (creations, deletions, and the worklogs to remember before deleting). Recurring events (`schedule-time.ts`
+  works out which weeks a fortnightly or monthly schedule falls in, and keeps the longest of any that
+  overlap) win over clashing worklogs, leave (`leave-planner.ts`) wins over both, and allocations fill the
+  rest in 15-minute blocks (any block left over by rounding goes to the largest allocation, so 100% fills
+  every free block, and over 100% is shared in proportion). Unallocated blocks are taken from the end of each
+  session, the mornings and afternoons either side of lunch, in Webster order so every session gives up its
+  part. Scattered allocations (`spreadPrefixes`) then each pick one block at random, seeded from the week,
+  in each equal part of what is left, and the other allocations take the remaining blocks in turn. The app's
+  own worklogs are re-planned whenever the settings no longer produce them. A week with its own allocations
+  replaces the automatic worklogs too. Either way, a second sync changes nothing.
 - `activity-allocations.ts`: pure functions from a week's evidence to its allocations.
 - `SettingsService` / `JiraIntegrationService`: `localStorage` persistence and the `jira.js` client, routed
   through the dev-server relay in the running app. Every worklog the app creates carries a

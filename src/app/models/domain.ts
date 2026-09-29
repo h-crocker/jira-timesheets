@@ -11,6 +11,12 @@ export interface CalendarEvent {
   pendingDeletion?: boolean;
 }
 
+/** How often a schedule repeats. */
+export type ScheduleRepeat = 'weekly' | 'fortnightly' | 'monthly';
+
+/** The last such weekday of the month, as a `weekOfMonth`. */
+export const LAST_WEEK_OF_MONTH = -1;
+
 export interface RecurringSchedule {
   id: string;
   issueKey: string;
@@ -19,6 +25,15 @@ export interface RecurringSchedule {
   startTime: string;
   durationSeconds: number;
   enabled: boolean;
+  /** Weekly when missing, as in settings saved before schedules could repeat less often. */
+  repeat?: ScheduleRepeat;
+  /** Fortnightly only: the Monday (yyyy-mm-dd) of a week the schedule happens in. */
+  anchorWeek?: string;
+  /**
+   * Monthly only: which of each weekday in the month the schedule happens on, 1 to 4 for the
+   * first to fourth, or `LAST_WEEK_OF_MONTH` for the last.
+   */
+  weekOfMonth?: number;
 }
 
 export interface PercentageAllocation {
@@ -37,6 +52,11 @@ export interface UserSettings {
   workDays: number[];
   allocations: PercentageAllocation[];
   schedules: RecurringSchedule[];
+  /**
+   * Allocations on issues whose key starts with one of these are scattered through the week;
+   * every other allocation is logged in one block, so one task follows another.
+   */
+  spreadPrefixes: string[];
   /**
    * Allocations filled from a week's activity, by the week's Monday (yyyy-mm-dd). A week listed here
    * uses them instead of `allocations`, and its sync replaces the worklogs Jira added automatically.
