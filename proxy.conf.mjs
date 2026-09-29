@@ -2,6 +2,7 @@
 // relays /jira-relay/* to the site named in the X-Jira-Host header instead (see JIRA_RELAY_URL).
 const ALLOWED_SITE =
   /^(?:https:\/\/[a-z0-9][a-z0-9-]*\.atlassian\.net|http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?)$/i;
+const RELAY_USER_AGENT = 'jira-timesheets-relay';
 
 export default {
   '/jira-relay': {
@@ -28,11 +29,19 @@ export default {
         forward(req, res, { ...options, target: site });
       };
       proxy.on('proxyReq', (proxyReq) => {
-        // Jira shouldn't see the page's origin or localhost cookies, and it treats
-        // browser-originated writes as possible XSRF unless they carry the no-check token.
-        for (const header of ['origin', 'referer', 'cookie', 'x-jira-host']) {
-          proxyReq.removeHeader(header);
+        // Jira shouldn't see the page's origin or localhost cookies. Jira Cloud also refuses writes
+        // that look like they came from a browser ("XSRF check failed", even with the no-check
+        // token), so the relay calls Jira as the server-side client it is, without the browser's
+        // user agent or its fetch-metadata and client-hint headers.
+        for (const header of proxyReq.getHeaderNames()) {
+          if (
+            ['origin', 'referer', 'cookie', 'x-jira-host'].includes(header) ||
+            /^sec-(?:fetch|ch)-/.test(header)
+          ) {
+            proxyReq.removeHeader(header);
+          }
         }
+        proxyReq.setHeader('User-Agent', RELAY_USER_AGENT);
         proxyReq.setHeader('X-Atlassian-Token', 'no-check');
       });
       proxy.on('proxyRes', (proxyRes) => {

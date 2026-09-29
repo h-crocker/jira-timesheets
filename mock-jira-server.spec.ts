@@ -340,6 +340,25 @@ describe('mock Jira server', () => {
     expect(get.headers.get('access-control-allow-origin')).toBeNull();
   });
 
+  it('refuses writes with a browser user agent, even with the no-check token, like Jira Cloud', async () => {
+    const post = (userAgent: string) =>
+      fetch(`${base}/rest/api/3/issue/GWP-2070/worklog`, {
+        method: 'POST',
+        headers: { ...JSON_HEADERS, 'User-Agent': userAgent, 'X-Atlassian-Token': 'no-check' },
+        body: JSON.stringify({ started: '2026-09-30T09:00:00.000+0000', timeSpentSeconds: 900 }),
+      });
+    const browser = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/141.0 Safari/537.36';
+
+    const refused = await post(browser);
+    expect(refused.status).toBe(403);
+    expect(await refused.text()).toBe('XSRF check failed');
+    expect((await post('jira-timesheets-relay')).status).toBe(201);
+    const read = await fetch(`${base}/rest/api/3/issue/GWP-2070/worklog`, {
+      headers: { ...DEV, 'User-Agent': browser },
+    });
+    expect(read.status).toBe(200);
+  });
+
   it('unknown routes return 404', async () => {
     const { response, body } = await getJson('/rest/api/2/issue/GWP-2070/comments');
     expect(response.status).toBe(404);

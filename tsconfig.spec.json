@@ -15,6 +15,7 @@
     "mock-jira-server.ts",
     "mock-jira-server.spec.ts",
     "mock-github-server.ts",
-    "mock-github-server.spec.ts"
+    "mock-github-server.spec.ts",
+    "proxy.conf.spec.ts"
   ]
 }

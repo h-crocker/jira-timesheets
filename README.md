@@ -20,6 +20,10 @@ app's Jira requests through the dev server (`proxy.conf.mjs`), which forwards th
 static `ng build` served elsewhere has no relay. GitHub does send CORS headers, so the app calls it
 directly.
 
+The relay calls Jira as a server-side client: it sends its own user agent instead of the browser's, and
+drops the browser's origin, cookies and `Sec-Fetch-*`/`Sec-CH-UA*` headers. Jira Cloud refuses writes that
+look like they came from a browser with 403 "XSRF check failed", even with `X-Atlassian-Token: no-check`.
+
 By default the app talks to the mock at `http://localhost:3000`. To use real Jira, enter your Atlassian
 email, an [API token](https://id.atlassian.com/manage-profile/security/api-tokens) and your site URL
 (e.g. `https://your-site.atlassian.net`) in the **Jira** section of the settings panel. Credentials are kept
@@ -33,7 +37,8 @@ To try the sync without touching real timesheets, use a free Atlassian Cloud dev
 (<https://go.atlassian.com/cloud-dev>) rather than your company's Jira.
 
 If requests fail, the `npm start` terminal shows the relay's error. A 401 means Jira rejected the email or
-token. Behind a TLS-inspecting corporate proxy, start the app with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`.
+token. A 403 "XSRF check failed" when syncing means Jira saw a browser's request: restart `npm start`, as
+the dev server only reads `proxy.conf.mjs` when it starts. Behind a TLS-inspecting corporate proxy, start the app with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`.
 
 ## Filling allocations from your activity
 
@@ -106,7 +111,8 @@ npm run build
   signal inputs and outputs, with no dependency injection. `App` is the single smart component.
 - `mock-jira-server.ts` mirrors Jira Cloud where the app depends on it: v3 comments in Atlassian Document
   Format, account IDs, Jira's `started` date format, per-user worklogs, worklog properties (returned only
-  with `expand=properties`), user properties, issue lookups, the JQL the app sends, and no CORS
-  headers. Its tests check its responses against `jira.js`'s own schemas.
+  with `expand=properties`), user properties, issue lookups, the JQL the app sends, no CORS
+  headers, and refusing writes sent with a browser's user agent. Its tests check its responses against
+  `jira.js`'s own schemas, and `proxy.conf.spec.ts` checks what the relay sends Jira.
 - `mock-github-server.ts` serves the GitHub endpoints the app reads, with Link-header pagination and CORS
   headers like GitHub's.

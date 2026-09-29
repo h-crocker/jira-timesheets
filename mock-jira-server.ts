@@ -8,6 +8,7 @@ const http = require('node:http') as typeof import('node:http');
 //
 // Deliberately sends no CORS headers: Jira Cloud doesn't either, so a page served from localhost
 // can't call it directly. `npm start` relays requests through the dev server (see proxy.conf.mjs).
+// Like Jira Cloud, it also refuses writes sent with a browser's user agent ("XSRF check failed").
 
 interface MockUser {
   accountId: string;
@@ -641,6 +642,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   const me = authenticate(req);
   if (me === null) {
     sendErrors(res, 401, ['Client must be authenticated to access this resource.']);
+    return;
+  }
+  // Jira Cloud refuses a write whose user agent is a browser's, even with the no-check token.
+  if (req.method !== 'GET' && /^Mozilla\//.test(req.headers['user-agent'] ?? '')) {
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    res.end('XSRF check failed');
     return;
   }
 
