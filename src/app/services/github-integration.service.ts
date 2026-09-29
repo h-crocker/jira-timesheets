@@ -1,5 +1,6 @@
 import { Injectable, inject } from '@angular/core';
 import type { ActivityKind } from '../models/domain';
+import { mapLimited } from './map-limited';
 import { SettingsService } from './settings.service';
 
 const PAGE_SIZE = 100;
@@ -70,24 +71,6 @@ function dayBefore(date: Date): string {
 function nextLink(header: string | null): string | null {
   const match = header?.match(/<([^>]+)>;\s*rel="next"/);
   return match?.[1] ?? null;
-}
-
-/** Runs `task` over `items` with at most `limit` running at once, keeping the order. */
-async function mapLimited<T, R>(
-  items: T[],
-  limit: number,
-  task: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const index = next++;
-      results[index] = await task(items[index]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
 }
 
 @Injectable({ providedIn: 'root' })

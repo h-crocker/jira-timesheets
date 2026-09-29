@@ -1,9 +1,10 @@
 import * as http from 'node:http';
 import {
-  BulkIssueResultsSchema,
   DashboardUserSchema,
   EntityPropertySchema,
+  IssueSchema,
   PageOfWorklogsSchema,
+  PropertyKeysSchema,
   SearchAndReconcileResultsSchema,
   WorklogSchema,
 } from 'jira.js/cloud';
@@ -291,18 +292,15 @@ describe('mock Jira server', () => {
     );
   });
 
-  it('bulk fetch returns the issues that exist and an error for each that does not', async () => {
-    const response = await fetch(`${base}/rest/api/3/issue/bulkfetch`, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ issueIdsOrKeys: ['GWP-2070', 'NOPE-1'], fields: ['summary'] }),
+  it('GET issue returns the fields asked for, and 404 for keys that do not exist', async () => {
+    const { response, body } = await getJson('/rest/api/3/issue/GWP-2070?fields=summary');
+    expect(response.status).toBe(200);
+    expect(IssueSchema.safeParse(body).error).toBeUndefined();
+    expect(body).toMatchObject({
+      key: 'GWP-2070',
+      fields: { summary: 'Rate limiting for the public API' },
     });
-    const body = await response.json();
-    expect(BulkIssueResultsSchema.safeParse(body).error).toBeUndefined();
-    expect(
-      body.issues.map((issue: { key: string; fields: object }) => [issue.key, issue.fields]),
-    ).toEqual([['GWP-2070', { summary: 'Rate limiting for the public API' }]]);
-    expect(body.issueErrors.map((error: { id: string }) => error.id)).toEqual(['NOPE-1']);
+    expect((await getJson('/rest/api/3/issue/NOPE-1?fields=summary')).response.status).toBe(404);
   });
 
   it('stores user properties for the caller only', async () => {
@@ -318,6 +316,12 @@ describe('mock Jira server', () => {
     expect(response.status).toBe(200);
     expect(EntityPropertySchema.safeParse(body).error).toBeUndefined();
     expect(body).toEqual({ key: 'jira-timesheets.test', value: { n: 2 } });
+
+    const keys = await getJson('/rest/api/3/user/properties?accountId=5d1f0f3c8e1a2b0c7a9d0001');
+    expect(PropertyKeysSchema.safeParse(keys.body).error).toBeUndefined();
+    expect(keys.body.keys.map((entry: { key: string }) => entry.key)).toEqual([
+      'jira-timesheets.test',
+    ]);
 
     expect((await put({ n: 3 }, { ...COLLEAGUE, 'Content-Type': 'application/json' })).status).toBe(
       403,

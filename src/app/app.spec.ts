@@ -463,6 +463,27 @@ describe('App (smart component)', () => {
       expect(app.plan().creations.filter(thursday).every((c) => c.source === 'activity')).toBe(true);
     });
 
+    it('loads a week with GET requests only, none of which fail', async () => {
+      const realFetch = globalThis.fetch;
+      const requests: string[] = [];
+      const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const response = await realFetch(input, init);
+        requests.push(`${init?.method ?? 'GET'} ${response.status} ${String(input)}`);
+        return response;
+      });
+      try {
+        await activity((settings) => {
+          settings.setGithubCredentials({ token: 'token', apiUrl: githubUrl });
+          settings.updateSettings({ placeholderIssueKey: 'GWP-100' });
+        });
+      } finally {
+        spy.mockRestore();
+      }
+      expect(requests.length).toBeGreaterThan(0);
+      // Jira Cloud refused a POST from the browser with 403, and a 404 read as an error.
+      expect(requests.filter((request) => !request.startsWith('GET 200 '))).toEqual([]);
+    });
+
     it('adds GitHub pull requests, sending those with no Jira key to the placeholder', async () => {
       const fixture = await activity((settings) => {
         settings.setGithubCredentials({ token: 'token', apiUrl: githubUrl });

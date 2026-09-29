@@ -94,7 +94,7 @@ npm run build
   signal inputs and outputs, with no dependency injection. `App` is the single smart component.
 - `mock-jira-server.ts` mirrors Jira Cloud where the app depends on it: v3 comments in Atlassian Document
   Format, account IDs, Jira's `started` date format, per-user worklogs, worklog properties (returned only
-  with `expand=properties`), user properties, bulk issue fetch, the JQL the app sends, and no CORS
+  with `expand=properties`), user properties, issue lookups, the JQL the app sends, and no CORS
   headers. Its tests check its responses against `jira.js`'s own schemas.
 - `mock-github-server.ts` serves the GitHub endpoints the app reads, with Link-header pagination and CORS
   headers like GitHub's.

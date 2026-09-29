@@ -68,16 +68,23 @@ export class ActivityService {
         ...(placeholder === '' ? [] : [placeholder]),
       ]),
     ];
-    const summaries = keys.length === 0 ? new Map() : await this.jira.fetchIssueSummaries(keys);
-    const { events, mapped } = mapPullRequests(
-      result.pulls,
-      new Set(summaries.keys()),
-      placeholder,
-    );
     const warnings = [...result.warnings];
-    if (placeholder !== '' && !summaries.has(placeholder)) {
-      warnings.push(`The placeholder ticket ${placeholder} doesn't exist in Jira.`);
+    let summaries = new Map<string, string>();
+    let validKeys: ReadonlySet<string>;
+    try {
+      summaries = keys.length === 0 ? summaries : await this.jira.fetchIssueSummaries(keys);
+      validKeys = new Set(summaries.keys());
+      if (placeholder !== '' && !summaries.has(placeholder)) {
+        warnings.push(`The placeholder ticket ${placeholder} doesn't exist in Jira.`);
+      }
+    } catch (error) {
+      // Not knowing which keys exist mustn't stop the week loading: trust the keys as named.
+      validKeys = new Set(keys);
+      warnings.push(
+        `Couldn't check the Jira keys pull requests name (${errorMessage(error)}), so they're used as they are.`,
+      );
     }
+    const { events, mapped } = mapPullRequests(result.pulls, validKeys, placeholder);
     return { events, pulls: mapped, summaries, warnings };
   }
 }

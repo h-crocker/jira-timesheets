@@ -563,31 +563,35 @@ async function handleWorklogs(
   sendErrors(res, 404, ['Not found']);
 }
 
-// Bulk fetch returns the issues that exist and an error for each key that doesn't.
-async function handleBulkFetch(req: IncomingMessage, res: ServerResponse, base: string) {
-  const body = await readJsonBody(req);
-  const keys = body?.['issueIdsOrKeys'];
-  if (!Array.isArray(keys) || keys.length === 0 || keys.length > 100) {
-    sendErrors(res, 400, ['issueIdsOrKeys must list between 1 and 100 issues']);
+// An issue with just the fields asked for; 404 for keys that don't exist, as Jira does.
+function handleIssue(res: ServerResponse, url: URL, base: string, issueKey: string): void {
+  if (!issueExists(issueKey)) {
+    sendErrors(res, 404, ['Issue does not exist or you do not have permission to see it.']);
     return;
   }
-  const fields = Array.isArray(body?.['fields']) ? (body['fields'] as unknown[]) : [];
-  const found = keys.filter((key): key is string => typeof key === 'string' && issueExists(key));
+  const fields = url.searchParams.getAll('fields').flatMap((value) => value.split(','));
   sendJson(res, 200, {
     expand: '',
-    issues: found.map((key) => ({
-      expand: '',
-      id: issueIdFor(key),
-      self: `${base}/rest/api/3/issue/${issueIdFor(key)}`,
+    id: issueIdFor(issueKey),
+    self: `${base}/rest/api/3/issue/${issueIdFor(issueKey)}`,
+    key: issueKey,
+    fields: fields.includes('summary') ? { summary: summaryOf(issueKey) } : {},
+  });
+}
+
+// The keys of the caller's user properties.
+function handleUserPropertyKeys(res: ServerResponse, url: URL, base: string, me: MockUser): void {
+  const accountId = url.searchParams.get('accountId') ?? me.accountId;
+  if (accountId !== me.accountId) {
+    sendErrors(res, 403, ['You do not have permission to access this user property.']);
+    return;
+  }
+  const keys = [...(userProperties.get(accountId)?.keys() ?? [])];
+  sendJson(res, 200, {
+    keys: keys.map((key) => ({
       key,
-      fields: fields.includes('summary') ? { summary: summaryOf(key) } : {},
+      self: `${base}/rest/api/3/user/properties/${encodeURIComponent(key)}?accountId=${accountId}`,
     })),
-    issueErrors: keys
-      .filter((key) => !found.includes(key as string))
-      .map((key) => ({
-        id: String(key),
-        errorMessage: 'Issue does not exist or you do not have permission to see it.',
-      })),
   });
 }
 
@@ -654,8 +658,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return;
   }
 
-  if (url.pathname === '/rest/api/3/issue/bulkfetch' && req.method === 'POST') {
-    await handleBulkFetch(req, res, base);
+  const issue = url.pathname.match(/^\/rest\/api\/[23]\/issue\/([^/]+)$/);
+  if (issue !== null && req.method === 'GET') {
+    handleIssue(res, url, base, decodeURIComponent(issue[1]));
+    return;
+  }
+
+  if (/^\/rest\/api\/[23]\/user\/properties$/.test(url.pathname) && req.method === 'GET') {
+    handleUserPropertyKeys(res, url, base, me);
     return;
   }
 

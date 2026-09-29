@@ -16,6 +16,10 @@ All six phases are implemented. Where the code differs from the plan below:
 - A pull request you only commented on doesn't count: it needs to be yours, or have your commits or a
   review with a verdict (approve or request changes) that week. A review left only as inline comments
   counts as commenting.
+- Keys are checked with one `GET /issue/{key}` per key (4 at a time), not `bulkFetchIssues`: Jira Cloud
+  answered the bulk fetch POST from the browser with 403. If the check fails anyway, the week still
+  loads and pull requests use the keys they name, with a warning. The week's user property is only read
+  when the property-keys listing shows it exists, so a week never synced isn't a 404.
 
 ## Outcome
 

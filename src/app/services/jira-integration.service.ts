@@ -2,6 +2,7 @@ import { Injectable, InjectionToken, inject } from '@angular/core';
 import { createCloudClient, type CloudClient } from 'jira.js';
 import type { Worklog } from 'jira.js/cloud';
 import type { JiraWorklog } from '../models/domain';
+import { mapLimited } from './map-limited';
 import { SettingsService } from './settings.service';
 
 const DEFAULT_HOST = 'http://localhost:3000';
@@ -11,7 +12,8 @@ const GENERATED_PROPERTY_KEY = 'jira-timesheets';
 const GENERATED_PROPERTY_VALUE = { generated: true, version: 1 };
 /** User property, one per week, holding copies of the worklogs the app replaced. */
 const REPLACED_PROPERTY_PREFIX = 'jira-timesheets.replaced.';
-const BULK_FETCH_SIZE = 100;
+/** Issue lookups in flight at once. */
+const MAX_LOOKUPS = 4;
 // ADF nodes whose children are inline text rather than blocks.
 const INLINE_PARENTS = new Set<unknown>(['paragraph', 'heading', 'codeBlock']);
 
@@ -162,11 +164,14 @@ export class JiraIntegrationService {
   async fetchReplaced(weekStart: Date): Promise<JiraWorklog[]> {
     const client = this.getClient();
     const accountId = await this.currentAccountId();
+    const propertyKey = REPLACED_PROPERTY_PREFIX + jqlDate(weekStart);
+    // Check the property exists first: until a sync saves one, reading it would be a 404.
+    const { keys = [] } = await client.userProperties.getUserPropertyKeys({ accountId });
+    if (!keys.some((key) => key.key === propertyKey)) {
+      return [];
+    }
     try {
-      const property = await client.userProperties.getUserProperty({
-        accountId,
-        propertyKey: REPLACED_PROPERTY_PREFIX + jqlDate(weekStart),
-      });
+      const property = await client.userProperties.getUserProperty({ accountId, propertyKey });
       return parseReplaced(property.value);
     } catch (error) {
       if (httpStatus(error) === 404) {
@@ -203,24 +208,28 @@ export class JiraIntegrationService {
     });
   }
 
-  /** Summaries of the issues that exist, by key. Keys Jira doesn't know are left out. */
+  /**
+   * Summaries of the issues you can see, by key, in the order asked. Keys Jira doesn't know, or
+   * won't show you, are left out. Each issue is read with a GET: Jira Cloud refused the bulk
+   * fetch POST from the browser (403).
+   */
   async fetchIssueSummaries(keys: string[]): Promise<Map<string, string>> {
     const client = this.getClient();
     const unique = [...new Set(keys)];
-    const summaries = new Map<string, string>();
-    for (let i = 0; i < unique.length; i += BULK_FETCH_SIZE) {
-      const result = await client.issues.bulkFetchIssues({
-        issueIdsOrKeys: unique.slice(i, i + BULK_FETCH_SIZE),
-        fields: ['summary'],
-      });
-      for (const issue of result.issues ?? []) {
-        if (issue.key !== undefined) {
-          const summary = (issue.fields as { summary?: unknown } | undefined)?.summary;
-          summaries.set(issue.key, typeof summary === 'string' ? summary : issue.key);
+    const found = await mapLimited(unique, MAX_LOOKUPS, async (key) => {
+      try {
+        const issue = await client.issues.getIssue({ issueIdOrKey: key, fields: ['summary'] });
+        const summary = (issue.fields as { summary?: unknown } | undefined)?.summary;
+        return [key, typeof summary === 'string' ? summary : key] as const;
+      } catch (error) {
+        const status = httpStatus(error);
+        if (status === 404 || status === 403) {
+          return null;
         }
+        throw error;
       }
-    }
-    return summaries;
+    });
+    return new Map(found.filter((entry) => entry !== null));
   }
 
   private currentAccountId(): Promise<string> {
