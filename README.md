@@ -40,6 +40,18 @@ If requests fail, the `npm start` terminal shows the relay's error. A 401 means 
 token. A 403 "XSRF check failed" when syncing means Jira saw a browser's request: restart `npm start`, as
 the dev server only reads `proxy.conf.mjs` when it starts. Behind a TLS-inspecting corporate proxy, start the app with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`.
 
+## How the week is filled
+
+Each working day starts at **Start time** and has **Hours per day** of work, with a **Lunch** break (an
+hour by default) after the first half: 7.5 hours from 09:00 is 09:00–12:45 and 13:45–17:30. Lunch isn't
+counted in the hours; set it to 0 for no break. Anything logged on a day counts toward its hours, even over
+lunch or after hours, so a day never adds up to more than its hours.
+
+Recurring meetings and leave go in first, and your allocations share out the rest. Every morning and
+afternoon gets its part of each allocation, one after the other, so each allocation is logged a little at a
+time all through the week: a 10% allocation takes 15 to 30 minutes each morning and afternoon. To change an
+allocation's percentage, edit the number next to it in the **Allocations** section.
+
 ## Filling allocations from your activity
 
 In the **Allocations** section, **Fill … from activity** sets the allocations for the week on screen from
@@ -53,7 +65,7 @@ Each kind of evidence has a weight, capped per issue per day, and a quiet day be
 issue counts as a little work on it. The weights become whole percentages that add up to 100, and they fill
 the **Allocations** section for that week, each with a line saying what it came from (pull requests with no
 Jira key show under the placeholder ticket). The week then uses those allocations instead of your usual
-ones; other weeks are unaffected. While a week has its own allocations, adding or removing one in the
+ones; other weeks are unaffected. While a week has its own allocations, adding, editing or removing one in the
 section edits that week's list, and **Use my usual allocations** goes back.
 
 A week with its own allocations **replaces** Jira's automatic worklogs: the plan deletes them (shown struck
@@ -66,7 +78,7 @@ In every week, the app's own worklogs follow your allocations: change them, even
 synced, and the preview shows the worklogs being moved at once (the old ones struck through), so it always
 shows what the sync will do. Syncing twice changes nothing. Allocations adding up to more than 100% share
 the week in proportion (adding 20% to a week filled to 100% gives it 20 parts in 120), and ones adding up to
-less leave the rest of the week empty; the **Allocations** section says which.
+less leave the rest of each morning and afternoon empty; the **Allocations** section says which.
 
 **Jira keys** come from the pull request title (a leading key first), then Jira links and keys in the
 description, then the branch name. Keys are checked against Jira. A pull request with no valid key goes to
@@ -97,7 +109,9 @@ npm run build
   (creations, deletions, and the worklogs to remember before deleting). Recurring events win over clashing
   worklogs, leave (`leave-planner.ts`) wins over both, and allocations fill the rest in 15-minute blocks
   (any block left over by rounding goes to the largest allocation, so 100% fills every free block, and over 100% is
-  shared in proportion). The app's own worklogs are re-planned whenever the settings no longer produce them. A week
+  shared in proportion). Each allocation's blocks are handed out in Webster order and cut into sessions, the
+  mornings and afternoons either side of lunch (`schedule-time.ts`), so every session gets its part of every
+  allocation. The app's own worklogs are re-planned whenever the settings no longer produce them. A week
   with its own allocations replaces the automatic worklogs too. Either way, a second sync changes nothing.
 - `activity-allocations.ts`: pure functions from a week's evidence to its allocations.
 - `SettingsService` / `JiraIntegrationService`: `localStorage` persistence and the `jira.js` client, routed

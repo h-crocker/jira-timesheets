@@ -30,7 +30,10 @@ export interface PercentageAllocation {
 
 export interface UserSettings {
   startTime: string;
+  /** Working hours per day, not counting lunch. */
   hoursPerDay: number;
+  /** The lunch break in the middle of each working day; 0 for none. */
+  lunchMinutes: number;
   workDays: number[];
   allocations: PercentageAllocation[];
   schedules: RecurringSchedule[];

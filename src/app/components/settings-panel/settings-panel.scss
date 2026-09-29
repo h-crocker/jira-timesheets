@@ -71,6 +71,16 @@
   .summary {
     flex: 1;
   }
+
+  .percentage {
+    display: flex;
+    align-items: center;
+    gap: 0.125rem;
+
+    input {
+      width: 4rem;
+    }
+  }
 }
 
 .allocation .evidence {

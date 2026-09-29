@@ -221,6 +221,31 @@ describe('App (smart component)', () => {
     expect(q(fixture, 'plan-summary').textContent).toContain('0 to create, 0 to delete');
   });
 
+  it("edits an allocation's percentage in place, and the preview follows", async () => {
+    const fixture = await create((settings) => {
+      settings.addAllocation({ id: 'a', issueKey: 'GWP-200', summary: 'Project', percentage: 50 });
+      settings.addAllocation({ id: 'b', issueKey: 'GWP-300', summary: 'Other', percentage: 50 });
+    });
+    await settle(fixture);
+
+    const field = q(fixture, 'allocation-percentage-a') as HTMLInputElement;
+    field.value = '25';
+    field.dispatchEvent(new Event('change'));
+    await settle(fixture);
+
+    expect(TestBed.inject(SettingsService).settings().allocations).toEqual([
+      { id: 'a', issueKey: 'GWP-200', summary: 'Project', percentage: 25 },
+      { id: 'b', issueKey: 'GWP-300', summary: 'Other', percentage: 50 },
+    ]);
+    const seconds = (issueKey: string) =>
+      fixture.componentInstance
+        .plan()
+        .creations.filter((creation) => creation.issueKey === issueKey)
+        .reduce((sum, creation) => sum + creation.timeSpentSeconds, 0);
+    expect(seconds('GWP-200') / seconds('GWP-300')).toBeCloseTo(0.5, 1);
+    expect(q(fixture, 'allocations-total').textContent).toContain('add up to 75%');
+  });
+
   it('week navigation changes the displayed week and events', async () => {
     const fixture = await create((settings) =>
       settings.addSchedule({
@@ -546,6 +571,18 @@ describe('App (smart component)', () => {
         'GWP-9',
       ]);
       expect(q(fixture, 'allocation-activity-GWP-2070')).toBeTruthy();
+
+      const field = q(fixture, 'allocation-percentage-activity-GWP-2070') as HTMLInputElement;
+      field.value = '5';
+      field.dispatchEvent(new Event('change'));
+      await settle(fixture);
+      expect(
+        weekAllocations()[WEEK_KEY].find((allocation) => allocation.issueKey === 'GWP-2070')
+          ?.percentage,
+      ).toBe(5);
+      expect(settings.settings().allocations).toEqual([
+        { id: 'u', issueKey: 'GWP-9', summary: 'Usual', percentage: 100 },
+      ]);
     });
 
     it('shows an allocation added to a filled week in the preview', async () => {
@@ -656,11 +693,19 @@ describe('App (smart component)', () => {
 
       tick(4).click();
       fixture.detectChanges();
+      // The working hours either side of lunch.
       expect(app.plan().creations.filter((creation) => creation.source === 'leave')).toEqual([
         {
           issueKey: 'HR-1',
           started: new Date(2026, 9, 1, 9).toISOString(),
-          timeSpentSeconds: FULL_DAY,
+          timeSpentSeconds: FULL_DAY / 2,
+          comment: 'Leave',
+          source: 'leave',
+        },
+        {
+          issueKey: 'HR-1',
+          started: new Date(2026, 9, 1, 13, 45).toISOString(),
+          timeSpentSeconds: FULL_DAY / 2,
           comment: 'Leave',
           source: 'leave',
         },
@@ -673,6 +718,7 @@ describe('App (smart component)', () => {
       tick(4).click();
       fixture.detectChanges();
       expect(app.plan().deletions).toEqual([
+        expect.objectContaining({ issueKey: 'HR-1', reason: 'stale-generated' }),
         expect.objectContaining({ issueKey: 'HR-1', reason: 'stale-generated' }),
       ]);
     });

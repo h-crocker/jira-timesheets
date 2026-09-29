@@ -18,6 +18,7 @@ function settings(overrides: Partial<UserSettings> = {}): UserSettings {
   return {
     startTime: '09:00',
     hoursPerDay: 7.5,
+    lunchMinutes: 60,
     workDays: [1, 2, 3, 4, 5],
     allocations: [],
     schedules: [],

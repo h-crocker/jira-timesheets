@@ -15,6 +15,7 @@ export const DEFAULT_GITHUB_API_URL = 'https://api.github.com';
 const DEFAULT_SETTINGS: UserSettings = {
   startTime: '09:00',
   hoursPerDay: 7.5,
+  lunchMinutes: 60,
   workDays: [1, 2, 3, 4, 5],
   allocations: [],
   schedules: [],
@@ -58,6 +59,17 @@ export class SettingsService {
     this.settings.update((current) => ({
       ...current,
       allocations: [...current.allocations, allocation],
+    }));
+    this.persistSettings(this.settings());
+  }
+
+  /** Replaces the allocation with the same id. */
+  updateAllocation(allocation: PercentageAllocation): void {
+    this.settings.update((current) => ({
+      ...current,
+      allocations: current.allocations.map((item) =>
+        item.id === allocation.id ? allocation : item,
+      ),
     }));
     this.persistSettings(this.settings());
   }
@@ -135,6 +147,13 @@ export class SettingsService {
     }
     if (typeof raw['hoursPerDay'] === 'number' && Number.isFinite(raw['hoursPerDay'])) {
       settings.hoursPerDay = raw['hoursPerDay'];
+    }
+    if (
+      typeof raw['lunchMinutes'] === 'number' &&
+      Number.isFinite(raw['lunchMinutes']) &&
+      raw['lunchMinutes'] >= 0
+    ) {
+      settings.lunchMinutes = raw['lunchMinutes'];
     }
     if (Array.isArray(raw['workDays'])) {
       settings.workDays = raw['workDays'].filter(

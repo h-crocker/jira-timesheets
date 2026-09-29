@@ -22,7 +22,19 @@
           (input)="onHoursPerDayInput($event)"
         />
       </label>
+      <label class="field">
+        <span>Lunch (minutes)</span>
+        <input
+          type="number"
+          step="15"
+          min="0"
+          data-testid="lunch-minutes"
+          [value]="effectiveLunchMinutes()"
+          (input)="onLunchMinutesInput($event)"
+        />
+      </label>
     </div>
+    <p class="hint">Lunch is taken in the middle of the day, on top of the hours per day.</p>
     <fieldset class="work-days">
       <legend>Work days</legend>
       @for (day of [1, 2, 3, 4, 5]; track day) {
@@ -104,7 +116,17 @@
             <div class="list-row">
               <span class="issue-key">{{ allocation.issueKey }}</span>
               <span class="summary">{{ allocation.summary }}</span>
-              <span class="percentage">{{ allocation.percentage }}%</span>
+              <label class="percentage">
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  [attr.aria-label]="'Percentage for ' + allocation.issueKey"
+                  [attr.data-testid]="'allocation-percentage-' + allocation.id"
+                  [value]="allocation.percentage"
+                  (change)="changeAllocationPercentage(allocation, $event)"
+                />%
+              </label>
               <button
                 type="button"
                 class="remove-button"

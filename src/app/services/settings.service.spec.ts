@@ -7,6 +7,7 @@ const CREDENTIALS_KEY = 'jira-timesheets:credentials';
 const DEFAULTS = {
   startTime: '09:00',
   hoursPerDay: 7.5,
+  lunchMinutes: 60,
   workDays: [1, 2, 3, 4, 5],
   allocations: [],
   schedules: [],
@@ -58,6 +59,17 @@ describe('SettingsService', () => {
     });
   });
 
+  it('loads the lunch break, keeping an hour when it was never saved or is negative', () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ lunchMinutes: 30 }));
+    expect(new SettingsService().settings().lunchMinutes).toBe(30);
+
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ lunchMinutes: 0 }));
+    expect(new SettingsService().settings().lunchMinutes).toBe(0);
+
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ lunchMinutes: -15 }));
+    expect(new SettingsService().settings().lunchMinutes).toBe(60);
+  });
+
   it('falls back to defaults when stored JSON is corrupt', () => {
     localStorage.setItem(SETTINGS_KEY, '{corrupt-json');
     localStorage.setItem(CREDENTIALS_KEY, 'not-json-at-all');
@@ -99,6 +111,10 @@ describe('SettingsService', () => {
 
     service.addAllocation(allocation);
     expect(service.settings().allocations).toEqual([allocation]);
+
+    service.updateAllocation({ ...allocation, percentage: 30 });
+    expect(service.settings().allocations).toEqual([{ ...allocation, percentage: 30 }]);
+    expect(JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '').allocations[0].percentage).toBe(30);
 
     service.setAllocations([]);
     expect(service.settings().allocations).toEqual([]);
