@@ -7,7 +7,7 @@ All six phases are implemented. Where the code differs from the plan below:
 - The organisation filter is `githubOrgs`.
 - Finding a pull request's key skips keys Jira doesn't know and moves on to the next source, so a title
   starting `UTF-8 …` still finds the `GWP-1` later in it. Every key a pull request mentions is checked
-  against Jira in one bulk fetch.
+  against Jira.
 - In allocation mode, a worklog that clashes with leave is deleted (`overlap-with-leave`), the same way one
   that clashes with a recurring event is.
 - In activity mode, worklogs on days after today are left as they are, and recurring meetings are not
