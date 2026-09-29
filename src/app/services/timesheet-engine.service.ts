@@ -31,6 +31,10 @@ function overlaps(a: Interval, b: Interval): boolean {
   return a.start < b.end && b.start < a.end;
 }
 
+function sameMinute(a: Date, b: Date): boolean {
+  return Math.floor(a.getTime() / 60000) === Math.floor(b.getTime() / 60000);
+}
+
 function freeGaps(slot: Interval, occupied: Interval[]): Interval[] {
   const relevant = occupied
     .map((interval) => ({
@@ -97,9 +101,29 @@ export class TimesheetEngineService {
         worklogId: worklog.id,
       }));
 
+    // A worklog that already records a recurring event (same issue, start and duration) satisfies
+    // it, so syncing again neither deletes it nor logs the event twice.
+    const recorded = new Set<string>();
+    const unrecordedEvents = recurringEvents.filter((recurring) => {
+      const record = jiraEvents.find(
+        (jiraEvent) =>
+          !recorded.has(jiraEvent.id) &&
+          jiraEvent.issueKey === recurring.issueKey &&
+          sameMinute(jiraEvent.start, recurring.start) &&
+          jiraEvent.timeSpentSeconds === recurring.timeSpentSeconds,
+      );
+      if (record !== undefined) {
+        recorded.add(record.id);
+      }
+      return record === undefined;
+    });
+
     const deletions: WorklogDeletion[] = [];
     const keptJiraEvents: CalendarEvent[] = [];
     for (const jiraEvent of jiraEvents) {
+      if (recorded.has(jiraEvent.id)) {
+        continue;
+      }
       const clashesWithRecurring = recurringEvents.some((recurring) => overlaps(recurring, jiraEvent));
       if (clashesWithRecurring) {
         deletions.push({
@@ -112,7 +136,7 @@ export class TimesheetEngineService {
       }
     }
 
-    const creations: WorklogCreation[] = recurringEvents.map((event) => ({
+    const creations: WorklogCreation[] = unrecordedEvents.map((event) => ({
       issueKey: event.issueKey,
       started: event.start.toISOString(),
       timeSpentSeconds: event.timeSpentSeconds,
