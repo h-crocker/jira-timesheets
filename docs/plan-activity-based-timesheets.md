@@ -1,5 +1,19 @@
 # Plan: fill the week from GitHub and Jira activity
 
+## Status
+
+All six phases are implemented. Where the code differs from the plan below:
+
+- The organisation filter is `githubOrgs`.
+- Finding a pull request's key skips keys Jira doesn't know and moves on to the next source, so a title
+  starting `UTF-8 …` still finds the `GWP-1` later in it. Every key a pull request mentions is checked
+  against Jira in one bulk fetch.
+- In allocation mode, a worklog that clashes with leave is deleted (`overlap-with-leave`), the same way one
+  that clashes with a recurring event is.
+- In activity mode, worklogs on days after today are left as they are, and recurring meetings are not
+  planned on those days. Leave can still be ticked on them.
+- `npm run mock-server` starts both mocks (`mock-servers.ts`).
+
 ## Outcome
 
 Filling in a timesheet should take a quick check and one click. Open the app and pick a week. The preview
@@ -87,8 +101,8 @@ follows `Link: rel="next"` for pagination and keeps at most 4 requests in flight
 1. `GET /user` gives your login.
 2. **Candidate PRs**: run three searches and merge the results by PR URL. Each search is
    `GET /search/issues?q=is:pr <who> updated:>=<weekStart − 1 day>`, where `<who>` is `author:<login>`,
-   `reviewed-by:<login>` or `commenter:<login>`. Add `org:<owner>` for each owner in the optional owner
-   filter. The search uses `updated:>=` rather than a closed date range: a PR you worked on last week but
+   `reviewed-by:<login>` or `commenter:<login>`. Add `org:<org>` for each organisation in the optional
+   organisation filter. The search uses `updated:>=` rather than a closed date range: a PR you worked on last week but
    that someone touched yesterday still counts.
 3. **What you did, with timestamps**, fetched for each candidate PR:
    - `GET /repos/{o}/{r}/pulls/{n}` returns the title, description, branch name, `created_at`,
@@ -251,7 +265,7 @@ interface UserSettings {
   activityMode: boolean;
   leaveIssueKey: string;
   placeholderIssueKey: string;
-  githubOwners: string[];
+  githubOrgs: string[];
 }
 interface GithubCredentials { token: string; apiUrl: string } // default https://api.github.com
 ```
@@ -274,7 +288,7 @@ de-duplicated against the saved copies, so the plan picks up where the sync stop
 
 ### 9. UI
 
-- **Settings panel.** A new **GitHub** section with the token, API URL and owner filter. The token is kept
+- **Settings panel.** A new **GitHub** section with the token, API URL and organisation filter. The token is kept
   in `localStorage` under its own key, with a *Clear* button, the same way Jira credentials are handled.
   A new **Activity** section with:
   - a **Fill my week from activity** toggle;
@@ -364,7 +378,7 @@ Each phase can ship and be tested on its own. Phase 2 is already useful without 
 
 - `github-integration.service.ts` (§2) and `activity-mapping.ts` (§3).
 - `jira-integration.service.ts`: `fetchIssueSummaries(keys)` via `bulkFetchIssues`.
-- `settings.service.ts`: add GitHub credentials and `githubOwners`.
+- `settings.service.ts`: add GitHub credentials and `githubOrgs`.
 - `mock-github-server.ts`, started with the Jira mock by `npm run mock-server`, on port 3001:
   - `/user`, `/search/issues`, and the pulls, commits, reviews and comments endpoints;
   - `Link` pagination and CORS headers, since GitHub sends them;
