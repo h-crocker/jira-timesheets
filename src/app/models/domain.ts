@@ -57,3 +57,17 @@ export interface ExecutionPlan {
   deletions: WorklogDeletion[];
   creations: WorklogCreation[];
 }
+
+export interface JiraWorklog {
+  id: string;
+  issueKey: string;
+  started: Date;
+  timeSpentSeconds: number;
+  comment?: string;
+}
+
+export interface EngineInput {
+  weekStart: Date;
+  settings: UserSettings;
+  worklogs: JiraWorklog[];
+}

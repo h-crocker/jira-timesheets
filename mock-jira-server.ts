@@ -129,7 +129,7 @@ function parseNonNegativeInt(value: string | null): number | undefined {
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const parsedUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-  const match = parsedUrl.pathname.match(/^\/rest\/api\/2\/issue\/([^/]+)\/worklog(?:\/([^/]+))?$/);
+  const match = parsedUrl.pathname.match(/^\/rest\/api\/[23]\/issue\/([^/]+)\/worklog(?:\/([^/]+))?$/);
   if (match === null) {
     sendJson(res, 404, { errorMessages: ['Not found'] });
     return;
@@ -148,8 +148,19 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       maxResults,
       total: all.length,
       issuetype: { name: 'Worklog' },
-      issues: all.slice(startAt, startAt + maxResults),
+      worklogs: all.slice(startAt, startAt + maxResults),
     });
+    return;
+  }
+
+  if (method === 'GET' && worklogId !== undefined) {
+    const worklogs = worklogStore.get(issueKey) ?? [];
+    const worklog = worklogs.find((entry) => entry.id === worklogId);
+    if (worklog === undefined) {
+      sendJson(res, 404, { errorMessages: ['Worklog not found'] });
+      return;
+    }
+    sendJson(res, 200, worklog);
     return;
   }
 

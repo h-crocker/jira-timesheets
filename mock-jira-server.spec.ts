@@ -32,16 +32,16 @@ describe('mock Jira server', () => {
     expect(body.maxResults).toBe(50);
     expect(body.total).toBe(2);
     expect(body.issuetype).toEqual({ name: 'Worklog' });
-    expect(Array.isArray(body.issues)).toBe(true);
-    expect(body.issues).toHaveLength(2);
+    expect(Array.isArray(body.worklogs)).toBe(true);
+    expect(body.worklogs).toHaveLength(2);
 
-    for (const issue of body.issues) {
-      expect(typeof issue.id).toBe('string');
-      expect(typeof issue.started).toBe('string');
-      expect(typeof issue.timeSpentSeconds).toBe('number');
+    for (const worklog of body.worklogs) {
+      expect(typeof worklog.id).toBe('string');
+      expect(typeof worklog.started).toBe('string');
+      expect(typeof worklog.timeSpentSeconds).toBe('number');
     }
 
-    const startedDates = body.issues.map((issue: { started: string }) => issue.started);
+    const startedDates = body.worklogs.map((worklog: { started: string }) => worklog.started);
     expect(startedDates).toContain('2026-09-28T09:00:00.000+0000');
     expect(startedDates).toContain('2026-09-29T09:00:00.000+0000');
   });
@@ -71,13 +71,13 @@ describe('mock Jira server', () => {
     const after = await fetch(`${base}/rest/api/2/issue/GWP-2070/worklog`);
     const afterBody = await after.json();
     expect(afterBody.total).toBe(beforeBody.total + 1);
-    expect(afterBody.issues.map((issue: { id: string }) => issue.id)).toContain(created.id);
+    expect(afterBody.worklogs.map((worklog: { id: string }) => worklog.id)).toContain(created.id);
   });
 
   it('DELETE removes a worklog and 404s when deleted again', async () => {
     const list = await fetch(`${base}/rest/api/2/issue/GWP-2070/worklog`);
     const listBody = await list.json();
-    const worklogId = listBody.issues[0].id;
+    const worklogId = listBody.worklogs[0].id;
 
     const deleted = await fetch(`${base}/rest/api/2/issue/GWP-2070/worklog/${worklogId}`, {
       method: 'DELETE',
@@ -87,7 +87,7 @@ describe('mock Jira server', () => {
     const after = await fetch(`${base}/rest/api/2/issue/GWP-2070/worklog`);
     const afterBody = await after.json();
     expect(afterBody.total).toBe(listBody.total - 1);
-    expect(afterBody.issues.map((issue: { id: string }) => issue.id)).not.toContain(worklogId);
+    expect(afterBody.worklogs.map((worklog: { id: string }) => worklog.id)).not.toContain(worklogId);
 
     const deletedAgain = await fetch(`${base}/rest/api/2/issue/GWP-2070/worklog/${worklogId}`, {
       method: 'DELETE',
