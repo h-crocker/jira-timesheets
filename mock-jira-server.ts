@@ -128,6 +128,15 @@ function parseNonNegativeInt(value: string | null): number | undefined {
 }
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Atlassian-Token');
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   const parsedUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
   const match = parsedUrl.pathname.match(/^\/rest\/api\/[23]\/issue\/([^/]+)\/worklog(?:\/([^/]+))?$/);
   if (match === null) {

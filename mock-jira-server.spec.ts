@@ -109,6 +109,20 @@ describe('mock Jira server', () => {
     expect(body.errorMessages.length).toBeGreaterThan(0);
   });
 
+  it('sends CORS headers and answers preflight requests', async () => {
+    const preflight = await fetch(`${base}/rest/api/2/issue/GWP-2070/worklog`, {
+      method: 'OPTIONS',
+      headers: { Origin: 'http://localhost:4200', 'Access-Control-Request-Method': 'POST' },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('access-control-allow-origin')).toBe('*');
+    expect(preflight.headers.get('access-control-allow-methods')).toContain('DELETE');
+    expect(preflight.headers.get('access-control-allow-headers')).toContain('Authorization');
+
+    const get = await fetch(`${base}/rest/api/2/issue/GWP-2070/worklog`);
+    expect(get.headers.get('access-control-allow-origin')).toBe('*');
+  });
+
   it('unknown routes return 404', async () => {
     const response = await fetch(`${base}/rest/api/2/issue/GWP-2070/comments`);
     expect(response.status).toBe(404);
