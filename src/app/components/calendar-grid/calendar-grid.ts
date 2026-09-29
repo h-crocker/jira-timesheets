@@ -4,11 +4,27 @@ import type { CalendarEvent } from '../../models/domain';
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+/** Hours always shown on the agenda, widened when events fall outside them. */
+const DEFAULT_FIRST_HOUR = 8;
+const DEFAULT_LAST_HOUR = 18;
+/** Vertical size of one hour on the agenda. */
+const HOUR_HEIGHT_REM = 3;
+/** Minimum height so very short events stay readable. */
+const MIN_EVENT_REM = 1.25;
+
 interface DayColumn {
   day: Date;
   /** Monday = 1, as in `workDays`. */
   weekday: number;
-  events: CalendarEvent[];
+  events: PositionedEvent[];
+}
+
+interface PositionedEvent {
+  event: CalendarEvent;
+  /** Offset from the top of the agenda, in rem. */
+  top: number;
+  /** Height proportional to the event's duration, in rem. */
+  height: number;
 }
 
 @Component({
@@ -27,9 +43,33 @@ export class CalendarGridComponent {
 
   leaveToggled = output<number>();
 
+  protected readonly hourHeightRem = HOUR_HEIGHT_REM;
+
+  /** First and last (exclusive) hour of the visible agenda. */
+  protected readonly hourRange = computed<{ first: number; last: number }>(() => {
+    let first = DEFAULT_FIRST_HOUR;
+    let last = DEFAULT_LAST_HOUR;
+    for (const event of this.events()) {
+      first = Math.min(first, event.start.getHours());
+      const endHour = event.end.getHours() + (event.end.getMinutes() > 0 ? 1 : 0);
+      last = Math.max(last, isSameDay(event.start, event.end) ? endHour : 24);
+    }
+    return { first, last };
+  });
+
+  protected readonly hours = computed<number[]>(() => {
+    const { first, last } = this.hourRange();
+    const hours: number[] = [];
+    for (let hour = first; hour < last; hour++) hours.push(hour);
+    return hours;
+  });
+
+  protected readonly agendaHeightRem = computed(() => this.hours().length * HOUR_HEIGHT_REM);
+
   protected readonly dayColumns = computed<DayColumn[]>(() => {
     const start = this.weekStart();
     const events = this.events();
+    const { first, last } = this.hourRange();
     return [0, 1, 2, 3, 4].map(offset => {
       const day = new Date(start);
       day.setDate(day.getDate() + offset);
@@ -38,7 +78,8 @@ export class CalendarGridComponent {
         weekday: offset + 1,
         events: events
           .filter(event => isSameDay(event.start, day))
-          .sort((a, b) => a.start.getTime() - b.start.getTime()),
+          .sort((a, b) => a.start.getTime() - b.start.getTime())
+          .map(event => position(event, first, last)),
       };
     });
   });
@@ -65,9 +106,23 @@ export class CalendarGridComponent {
     return this.lockedLeaveDays().includes(weekday);
   }
 
+  protected hourLabel(hour: number): string {
+    return `${String(hour).padStart(2, '0')}:00`;
+  }
+
   protected timeRange(event: CalendarEvent): string {
     return `${formatTime(event.start)}–${formatTime(event.end)}`;
   }
+}
+
+function position(event: CalendarEvent, firstHour: number, lastHour: number): PositionedEvent {
+  const startHours = event.start.getHours() + event.start.getMinutes() / 60;
+  const endHours = isSameDay(event.start, event.end)
+    ? event.end.getHours() + event.end.getMinutes() / 60
+    : lastHour;
+  const top = (startHours - firstHour) * HOUR_HEIGHT_REM;
+  const height = Math.max(MIN_EVENT_REM, (endHours - startHours) * HOUR_HEIGHT_REM);
+  return { event, top, height };
 }
 
 function isSameDay(a: Date, b: Date): boolean {

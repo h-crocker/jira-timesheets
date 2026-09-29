@@ -61,6 +61,33 @@ describe('CalendarGridComponent', () => {
     expect(row.querySelector('.source-badge')!.getAttribute('data-source')).toBe('allocated');
   });
 
+  it('sizes and positions events by their start time and duration', () => {
+    const el = root(create([event('long', 0, 9, 2, 'jira'), event('short', 0, 13, 0.5, 'jira')]));
+    const long = el.querySelector<HTMLElement>('[data-testid="event-long"]')!;
+    const short = el.querySelector<HTMLElement>('[data-testid="event-short"]')!;
+    // The agenda starts at 08:00 with 3rem per hour.
+    expect(long.style.top).toBe('3rem');
+    expect(long.style.height).toBe('6rem');
+    expect(short.style.top).toBe('15rem');
+    expect(parseFloat(long.style.height)).toBeGreaterThan(parseFloat(short.style.height));
+    expect(long.querySelector('.time-range')!.textContent).toBe('09:00–11:00');
+    expect(short.querySelector('.time-range')!.textContent).toBe('13:00–13:30');
+  });
+
+  it('shows working hours by default and widens the axis for events outside them', () => {
+    const fixture = create([]);
+    const labels = () =>
+      Array.from(root(fixture).querySelectorAll('.hour-label')).map((n) => n.textContent?.trim());
+    expect(labels()[0]).toBe('08:00');
+    expect(labels().at(-1)).toBe('17:00');
+
+    fixture.componentRef.setInput('events', [event('early', 0, 6, 1, 'jira'), event('late', 1, 19, 1.5, 'jira')]);
+    fixture.detectChanges();
+    expect(labels()[0]).toBe('06:00');
+    expect(labels().at(-1)).toBe('20:00');
+    expect(root(fixture).querySelector<HTMLElement>('[data-testid="event-early"]')!.style.top).toBe('0rem');
+  });
+
   it('re-renders when the events input changes', () => {
     const fixture = create([]);
     fixture.componentRef.setInput('events', [event('1', 4, 9, 1, 'jira')]);

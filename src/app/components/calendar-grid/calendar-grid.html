@@ -1,4 +1,12 @@
-<div class="calendar-grid" data-testid="calendar-grid">
+<div class="calendar-grid" data-testid="calendar-grid" [style.--hour-height.rem]="hourHeightRem">
+  <div class="hour-axis" aria-hidden="true">
+    <div class="axis-spacer"></div>
+    <div class="hour-labels" [style.height.rem]="agendaHeightRem()">
+      @for (hour of hours(); track hour) {
+        <div class="hour-label">{{ hourLabel(hour) }}</div>
+      }
+    </div>
+  </div>
   @for (column of dayColumns(); track column.day.getTime()) {
     <div class="day-column" [attr.data-date]="dateKey(column.day)">
       <header class="day-header">
@@ -22,26 +30,35 @@
           </label>
         }
       </header>
-      @if (column.events.length === 0) {
-        <div class="empty" data-testid="empty-state">No entries</div>
-      } @else {
-        <div class="events">
-          @for (event of column.events; track event.id) {
-            <div
-              class="event-row"
-              [class.pending-deletion]="event.pendingDeletion"
-              [attr.data-testid]="'event-' + event.id"
-              [attr.data-pending-deletion]="event.pendingDeletion ? 'true' : null"
-              [attr.title]="event.pendingDeletion ? 'Deleted when you sync' : null"
-            >
-              <span class="time-range">{{ timeRange(event) }}</span>
-              <span class="issue-key">{{ event.issueKey }}</span>
-              <span class="summary">{{ event.summary }}</span>
-              <span class="source-badge" [attr.data-source]="event.source">{{ event.source }}</span>
-            </div>
-          }
-        </div>
-      }
+      <div class="events" [style.height.rem]="agendaHeightRem()">
+        @if (column.events.length === 0) {
+          <div class="empty" data-testid="empty-state">No entries</div>
+        }
+        @for (item of column.events; track item.event.id) {
+          <div
+            class="event-row"
+            [class.pending-deletion]="item.event.pendingDeletion"
+            [class.short]="item.height < 2.5"
+            [style.top.rem]="item.top"
+            [style.height.rem]="item.height"
+            [attr.data-testid]="'event-' + item.event.id"
+            [attr.data-source]="item.event.source"
+            [attr.data-pending-deletion]="item.event.pendingDeletion ? 'true' : null"
+            [attr.title]="
+              item.event.pendingDeletion
+                ? 'Deleted when you sync'
+                : timeRange(item.event) + ' · ' + item.event.issueKey + ' ' + item.event.summary
+            "
+          >
+            <span class="issue-key">{{ item.event.issueKey }}</span>
+            <span class="time-range">{{ timeRange(item.event) }}</span>
+            <span class="summary">{{ item.event.summary }}</span>
+            <span class="source-badge" [attr.data-source]="item.event.source">{{
+              item.event.source
+            }}</span>
+          </div>
+        }
+      </div>
     </div>
   }
 </div>
