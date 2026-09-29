@@ -312,6 +312,93 @@ describe('TimesheetEngineService', () => {
     expect(engine.computePlan(input({ settings }))).toEqual({ deletions: [], creations: [] });
   });
 
+  it('keeps a worklog that already records a recurring event rather than re-creating it', () => {
+    const settings = defaultSettings({
+      schedules: [
+        {
+          id: 's1',
+          issueKey: 'GWP-1',
+          summary: 'Standup',
+          weekdays: [1, 2],
+          startTime: '10:00',
+          durationSeconds: 900,
+          enabled: true,
+        },
+      ],
+    });
+
+    const worklogs = [worklog('w1', at(0, 10), 900, 'GWP-1')];
+    const plan = engine.computePlan(input({ settings, worklogs }));
+
+    expect(plan.deletions).toEqual([]);
+    expect(plan.creations).toEqual([
+      {
+        issueKey: 'GWP-1',
+        started: at(1, 10).toISOString(),
+        timeSpentSeconds: 900,
+        comment: 'Standup',
+      },
+    ]);
+  });
+
+  it('still replaces a clashing worklog on the recurring issue whose times differ', () => {
+    const settings = defaultSettings({
+      schedules: [
+        {
+          id: 's1',
+          issueKey: 'GWP-1',
+          summary: 'Standup',
+          weekdays: [1],
+          startTime: '10:00',
+          durationSeconds: 900,
+          enabled: true,
+        },
+      ],
+    });
+
+    const worklogs = [worklog('w1', at(0, 10), 1800, 'GWP-1')];
+    const plan = engine.computePlan(input({ settings, worklogs }));
+
+    expect(plan.deletions).toEqual([
+      { worklogId: 'w1', issueKey: 'GWP-1', reason: 'overlap-with-recurring' },
+    ]);
+    expect(plan.creations).toHaveLength(1);
+  });
+
+  it('plans nothing once its own plan has been applied', () => {
+    const settings = defaultSettings({
+      schedules: [
+        {
+          id: 's1',
+          issueKey: 'GWP-1',
+          summary: 'Standup',
+          weekdays: [1, 3, 5],
+          startTime: '09:30',
+          durationSeconds: 900,
+          enabled: true,
+        },
+      ],
+      allocations: [{ id: 'a1', issueKey: 'GWP-9', summary: 'Allocation', percentage: 100 }],
+    });
+    const existing = [
+      worklog('w1', at(0, 9, 15), 1800, 'GWP-1'),
+      worklog('w2', at(1, 14), 3600, 'GWP-3'),
+    ];
+
+    const first = engine.computePlan(input({ settings, worklogs: existing }));
+    const deleted = new Set(first.deletions.map((deletion) => deletion.worklogId));
+    const synced = [
+      ...existing.filter((entry) => !deleted.has(entry.id)),
+      ...first.creations.map(({ issueKey, started, timeSpentSeconds }, index) =>
+        worklog(`new-${index}`, new Date(started), timeSpentSeconds, issueKey),
+      ),
+    ];
+
+    expect(first.deletions.map((deletion) => deletion.worklogId)).toEqual(['w1']);
+    const second = engine.computePlan(input({ settings, worklogs: synced }));
+    expect(second).toEqual({ deletions: [], creations: [] });
+  });
+
   it('places an allocation that fits one day as a single chunk', () => {
     const settings = defaultSettings({
       allocations: [{ id: 'a1', issueKey: 'GWP-9', summary: 'Allocation', percentage: 10 }],

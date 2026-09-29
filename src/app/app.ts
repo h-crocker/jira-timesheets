@@ -143,9 +143,10 @@ export class App {
 
   constructor() {
     effect(() => {
+      const week = this.currentWeek();
       const keys = this.issueKeys();
       this.credentials();
-      untracked(() => void this.loadWorklogs(keys));
+      untracked(() => void this.loadWorklogs(week, keys));
     });
   }
 
@@ -183,7 +184,7 @@ export class App {
   }
 
   async reload(): Promise<void> {
-    await this.loadWorklogs(this.issueKeys());
+    await this.loadWorklogs(this.currentWeek(), this.issueKeys());
   }
 
   async syncWeek(): Promise<void> {
@@ -197,9 +198,7 @@ export class App {
     }
     this.status.set({ kind: 'syncing' });
     try {
-      for (const deletion of plan.deletions) {
-        await this.jira.deleteWorklog(deletion.issueKey, deletion.worklogId);
-      }
+      // Create before deleting: if a request fails part-way, Jira keeps extra time, not loses it.
       for (const creation of plan.creations) {
         await this.jira.createWorklog(
           creation.issueKey,
@@ -208,7 +207,10 @@ export class App {
           creation.comment,
         );
       }
-      const worklogs = await this.fetchAll(this.issueKeys());
+      for (const deletion of plan.deletions) {
+        await this.jira.deleteWorklog(deletion.issueKey, deletion.worklogId);
+      }
+      const worklogs = await this.fetchAll(this.currentWeek(), this.issueKeys());
       this.worklogs.set(worklogs);
       this.status.set({
         kind: 'success',
@@ -219,16 +221,11 @@ export class App {
     }
   }
 
-  private async loadWorklogs(keys: string): Promise<void> {
+  private async loadWorklogs(week: Date, keys: string): Promise<void> {
     const request = ++this.loadRequest;
-    if (keys === '') {
-      this.worklogs.set([]);
-      this.status.set({ kind: 'idle' });
-      return;
-    }
     this.status.set({ kind: 'loading' });
     try {
-      const worklogs = await this.fetchAll(keys);
+      const worklogs = await this.fetchAll(week, keys);
       if (request !== this.loadRequest) {
         return;
       }
@@ -242,11 +239,9 @@ export class App {
     }
   }
 
-  private async fetchAll(keys: string): Promise<JiraWorklog[]> {
-    if (keys === '') {
-      return [];
-    }
-    const results = await Promise.all(keys.split(',').map((key) => this.jira.fetchWorklogs(key)));
-    return results.flat();
+  // The user's worklogs anywhere in Jira that week, plus the configured issues so that worklogs
+  // this app just wrote show up before Jira's search index catches up.
+  private fetchAll(week: Date, keys: string): Promise<JiraWorklog[]> {
+    return this.jira.fetchMyWorklogs(week, addDays(week, 7), keys === '' ? [] : keys.split(','));
   }
 }

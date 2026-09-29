@@ -6,7 +6,7 @@ import type { JiraCredentials } from './models/domain';
 import { JiraIntegrationService } from './services/jira-integration.service';
 import { SettingsService } from './services/settings.service';
 
-const { startServer, stopServer } = mockServer;
+const { startServer, stopServer, resetMockJira } = mockServer;
 
 const WEEK = new Date(2026, 8, 28); // Monday; the mock server seeds worklogs on this week
 
@@ -37,6 +37,7 @@ describe('App (smart component)', () => {
 
   beforeEach(() => {
     localStorage.clear();
+    resetMockJira();
   });
 
   async function create(seed?: (settings: SettingsService) => void) {
@@ -55,8 +56,14 @@ describe('App (smart component)', () => {
   const q = (fixture: { nativeElement: unknown }, testId: string) =>
     root(fixture).querySelector<HTMLElement>(`[data-testid="${testId}"]`)!;
 
+  const rowsFor = (fixture: { nativeElement: unknown }, text: string, scope = '') =>
+    Array.from(root(fixture).querySelectorAll(`${scope} .event-row`)).filter((row) =>
+      row.textContent?.includes(text),
+    );
+  const pad = (value: number) => String(value).padStart(2, '0');
+
   async function settle(fixture: Awaited<ReturnType<typeof create>>) {
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 40; i++) {
       await new Promise((resolve) => setTimeout(resolve, 25));
       fixture.detectChanges();
       if (!fixture.componentInstance.busy()) {
@@ -75,21 +82,36 @@ describe('App (smart component)', () => {
     expect(q(fixture, 'week-label').textContent).toContain('Sep 28');
   });
 
-  it('shows an empty grid and idle state without any configured issues', async () => {
+  it("shows the user's existing Jira worklogs for the week with nothing configured", async () => {
     const fixture = await create();
-    expect(root(fixture).querySelectorAll('.event-row').length).toBe(0);
+    await settle(fixture);
+    const summaries = Array.from(root(fixture).querySelectorAll('.event-row'))
+      .filter((row) => row.querySelector('.source-badge')?.getAttribute('data-source') === 'jira')
+      .map((row) => row.querySelector('.summary')?.textContent?.trim());
+    expect(summaries.sort()).toEqual(['Code review', 'Support ticket', 'Work on feature']);
+    expect(root(fixture).textContent).not.toContain("Colleague's pairing session");
     expect(q(fixture, 'plan-summary').textContent).toContain('0 to create, 0 to delete');
     expect((q(fixture, 'sync') as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('loads existing Jira worklogs for configured issues into the grid', async () => {
+  it("never plans to delete a colleague's worklog on a shared issue", async () => {
+    // A recurring event on top of the colleague's seeded GWP-2070 entry, in local time.
+    const colleagueStart = new Date('2026-09-28T13:00:00Z');
     const fixture = await create((settings) =>
-      settings.addAllocation({ id: 'a', issueKey: 'GWP-2070', summary: 'Main', percentage: 0 }),
+      settings.addSchedule({
+        id: 's',
+        issueKey: 'GWP-2070',
+        summary: 'Workshop',
+        weekdays: [colleagueStart.getDay()],
+        startTime: `${pad(colleagueStart.getHours())}:${pad(colleagueStart.getMinutes())}`,
+        durationSeconds: 3600,
+        enabled: true,
+      }),
     );
     await settle(fixture);
-    const sources = Array.from(root(fixture).querySelectorAll('.source-badge')).map((n) => n.textContent?.trim());
-    expect(sources.filter((source) => source === 'jira').length).toBe(2);
-    expect(root(fixture).textContent).toContain('Work on feature');
+    const comments = fixture.componentInstance.worklogs().map((worklog) => worklog.comment);
+    expect(comments).not.toContain("Colleague's pairing session");
+    expect(fixture.componentInstance.plan().deletions).toEqual([]);
   });
 
   it('adding a recurring schedule via the settings panel mutates the calendar grid', async () => {
@@ -131,7 +153,11 @@ describe('App (smart component)', () => {
       .derivedCalendarEvents()
       .filter((event) => event.source === 'allocated')
       .reduce((sum, event) => sum + event.timeSpentSeconds, 0);
-    expect(totalSeconds).toBe(5 * 7.5 * 3600);
+    const loggedSeconds = fixture.componentInstance
+      .worklogs()
+      .reduce((sum, worklog) => sum + worklog.timeSpentSeconds, 0);
+    expect(loggedSeconds).toBeGreaterThan(0);
+    expect(totalSeconds).toBe(5 * 7.5 * 3600 - loggedSeconds);
   });
 
   it('week navigation changes the displayed week and events', async () => {
@@ -148,6 +174,22 @@ describe('App (smart component)', () => {
     expect(root(fixture).querySelector('[data-date="2026-09-28"]')).toBeNull();
   });
 
+  it("loads the displayed week's worklogs when navigating", async () => {
+    const fixture = await create();
+    await settle(fixture);
+    await TestBed.inject(JiraIntegrationService).createWorklog(
+      'GWP-2070',
+      new Date(2026, 9, 6, 11, 0).toISOString(),
+      1800,
+      'Next week work',
+    );
+    q(fixture, 'next-week').click();
+    await settle(fixture);
+    const tuesday = root(fixture).querySelector('[data-date="2026-10-06"]');
+    expect(tuesday?.textContent).toContain('Next week work');
+    expect(root(fixture).textContent).not.toContain('Code review');
+  });
+
   it('removing a schedule via the panel clears it from the grid', async () => {
     const fixture = await create((settings) =>
       settings.addSchedule({
@@ -155,36 +197,58 @@ describe('App (smart component)', () => {
       }),
     );
     await settle(fixture);
-    expect(root(fixture).querySelectorAll('.event-row').length).toBe(1);
+    expect(rowsFor(fixture, 'GWP-100').length).toBe(1);
     q(fixture, 'remove-schedule-s').click();
     await settle(fixture);
-    expect(root(fixture).querySelectorAll('.event-row').length).toBe(0);
+    expect(rowsFor(fixture, 'GWP-100').length).toBe(0);
   });
 
-  it('recurring event overrides a clashing existing worklog (planned deletion)', async () => {
+  // Thursday, which has no seeded worklogs in any time zone.
+  async function withClash() {
     const fixture = await create();
     await TestBed.inject(JiraIntegrationService).createWorklog(
       'GWP-CLASH',
-      new Date(2026, 8, 28, 10, 0).toISOString(),
+      new Date(2026, 9, 1, 10, 0).toISOString(),
       3600,
       'Existing entry',
     );
     TestBed.inject(SettingsService).addSchedule({
-      id: 's', issueKey: 'GWP-CLASH', summary: 'Recurring', weekdays: [1], startTime: '10:30', durationSeconds: 1800, enabled: true,
+      id: 's', issueKey: 'GWP-CLASH', summary: 'Recurring', weekdays: [4], startTime: '10:30', durationSeconds: 1800, enabled: true,
     });
     await settle(fixture);
+    return fixture;
+  }
+
+  it('recurring event overrides a clashing existing worklog (planned deletion)', async () => {
+    const fixture = await withClash();
 
     expect(fixture.componentInstance.plan().deletions.map((d) => d.issueKey)).toEqual(['GWP-CLASH']);
-    const monday = Array.from(root(fixture).querySelectorAll('[data-date="2026-09-28"] .event-row'));
-    expect(monday.length).toBe(1);
-    expect(monday[0].querySelector('.source-badge')?.getAttribute('data-source')).toBe('recurring');
-    expect(monday[0].textContent).toContain('Recurring');
+    const thursday = rowsFor(fixture, 'GWP-CLASH', '[data-date="2026-10-01"]');
+    expect(thursday.length).toBe(1);
+    const source = thursday[0].querySelector('.source-badge')?.getAttribute('data-source');
+    expect(source).toBe('recurring');
+    expect(thursday[0].textContent).toContain('Recurring');
   });
 
-  it('syncWeek pushes the plan to the mock Jira server and reloads', async () => {
+  it('creates the replacement before deleting the clashing worklog', async () => {
+    const fixture = await withClash();
+    const jira = TestBed.inject(JiraIntegrationService);
+    const created = vi.spyOn(jira, 'createWorklog');
+    const deleted = vi.spyOn(jira, 'deleteWorklog');
+
+    q(fixture, 'sync').click();
+    await settle(fixture);
+
+    expect(q(fixture, 'status').textContent).toContain('Synced: 1 created, 1 deleted');
+    expect(created.mock.invocationCallOrder[0]).toBeLessThan(deleted.mock.invocationCallOrder[0]);
+    const comments = fixture.componentInstance.worklogs().map((worklog) => worklog.comment);
+    expect(comments).not.toContain('Existing entry');
+  });
+
+  it('syncWeek pushes the plan to the mock, reloads, and leaves nothing to sync', async () => {
     const fixture = await create((settings) =>
       settings.addSchedule({
-        id: 's', issueKey: 'GWP-SYNC', summary: 'Sync test', weekdays: [2], startTime: '14:00', durationSeconds: 1800, enabled: true,
+        id: 's', issueKey: 'GWP-SYNC', summary: 'Sync test', weekdays: [4], startTime: '14:00', durationSeconds: 1800, enabled: true,
       }),
     );
     await settle(fixture);
@@ -197,6 +261,8 @@ describe('App (smart component)', () => {
     const worklogs = fixture.componentInstance.worklogs().filter((w) => w.issueKey === 'GWP-SYNC');
     expect(worklogs.length).toBe(1);
     expect(worklogs[0].timeSpentSeconds).toBe(1800);
+    expect(q(fixture, 'plan-summary').textContent).toContain('0 to create, 0 to delete');
+    expect((q(fixture, 'sync') as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('shows an error when Jira cannot be reached', async () => {
