@@ -79,6 +79,42 @@ describe('GithubIntegrationService', () => {
     expect(api.body).toContain('/browse/GWP-2070');
   });
 
+  it('leaves out pull requests you only commented on', async () => {
+    const pulls = await service().fetchMyPullRequestActivity(MONDAY, NEXT_MONDAY);
+    expect(pulls.map((pull) => `${pull.repo}#${pull.number}`)).not.toContain('acme/web#60');
+  });
+
+  it('counts a review with no verdict as commenting', async () => {
+    const realFetch = globalThis.fetch;
+    // devuser's approval on acme/web#52, turned into a review left only as comments.
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const response = await realFetch(input, init);
+      if (!String(input).includes('/pulls/52/reviews')) {
+        return response;
+      }
+      const reviews = (await response.json()) as Array<{ state: string }>;
+      return new Response(
+        JSON.stringify(reviews.map((review) => ({ ...review, state: 'COMMENTED' }))),
+        { headers: response.headers },
+      );
+    });
+    try {
+      const pulls = await service().fetchMyPullRequestActivity(MONDAY, NEXT_MONDAY);
+      expect(pulls.map((pull) => `${pull.repo}#${pull.number}`)).not.toContain('acme/web#52');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('keeps your own pull request even when you only commented on it that week', async () => {
+    const pulls = await service().fetchMyPullRequestActivity(
+      new Date(2026, 8, 30, 13, 15),
+      new Date(2026, 8, 30, 14),
+    );
+    expect(Object.keys(describePulls(pulls))).toEqual(['acme/tools#7']);
+    expect(pulls[0].actions.map((action) => action.kind)).toEqual(['comment']);
+  });
+
   it('leaves out actions outside the week', async () => {
     const pulls = await service().fetchMyPullRequestActivity(
       new Date(2026, 8, 30),

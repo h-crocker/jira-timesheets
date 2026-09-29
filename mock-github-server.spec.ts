@@ -62,9 +62,11 @@ describe('mock GitHub server', () => {
       'personal/dotfiles#3',
     ]);
     expect(await numbers('is:pr reviewed-by:devuser updated:>=2026-09-27')).toEqual([
+      'acme/web#60',
       'acme/web#52',
     ]);
     expect(await numbers('is:pr commenter:devuser updated:>=2026-09-27')).toEqual([
+      'acme/web#60',
       'acme/tools#7',
       'acme/web#52',
     ]);

@@ -478,6 +478,9 @@ describe('App (smart component)', () => {
         root(fixture).querySelectorAll('[data-testid="unkeyed-pull-request"] a'),
       ).map((link) => link.textContent);
       expect(unkeyed.sort()).toEqual(['acme/tools#7', 'personal/dotfiles#3']);
+      // A pull request you only commented on is not your work.
+      expect(q(fixture, 'activity-panel').textContent).not.toContain('acme/web#60');
+      expect(root(fixture).querySelector('[data-testid="activity-GWP-2090"]')).toBeNull();
       const comments = fixture.componentInstance.plan().creations.map((creation) => creation.comment);
       expect(comments.some((comment) => comment?.includes('acme/api#41 Add rate limiting'))).toBe(true);
 

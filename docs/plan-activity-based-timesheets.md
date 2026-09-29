@@ -13,13 +13,16 @@ All six phases are implemented. Where the code differs from the plan below:
 - In activity mode, worklogs on days after today are left as they are, and recurring meetings are not
   planned on those days. Leave can still be ticked on them.
 - `npm run mock-server` starts both mocks (`mock-servers.ts`).
+- A pull request you only commented on doesn't count: it needs to be yours, or have your commits or a
+  review with a verdict (approve or request changes) that week. A review left only as inline comments
+  counts as commenting.
 
 ## Outcome
 
 Filling in a timesheet should take a quick check and one click. Open the app and pick a week. The preview
 already shows the week filled in from what you actually did:
 
-1. **GitHub**: pull requests you opened, pushed commits to, reviewed or commented on that week.
+1. **GitHub**: pull requests you opened, pushed commits to or reviewed that week.
 2. **Jira**: the worklogs that Jira added under your account each time you finished a piece of work.
 
 Each working day is split between the issues you worked on, in proportion to how much you did on each

@@ -40,7 +40,8 @@ token. Behind a TLS-inspecting corporate proxy, start the app with `NODE_EXTRA_C
 Tick **Fill my week from activity** in the **Activity** section of the settings panel. The app then works
 out what you worked on each day from:
 
-- **GitHub**: pull requests you opened, committed to, reviewed or commented on that week;
+- **GitHub**: pull requests you opened, committed to or reviewed (approved or requested changes) that
+  week. Your comments on those add to them, but a pull request you only commented on doesn't count;
 - **Jira**: the worklogs Jira added for you automatically, e.g. when an issue moved to Done.
 
 Each working day (your hours, less recurring meetings and leave) is split into 15-minute blocks and shared

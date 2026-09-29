@@ -50,6 +50,7 @@ interface Commit {
 interface Review {
   id: number;
   user: { login: string } | null;
+  state: string;
   submitted_at?: string | null;
 }
 
@@ -100,9 +101,10 @@ export class GithubIntegrationService {
   }
 
   /**
-   * Pull requests you opened, reviewed or commented on that were updated since the day before
-   * `from`, with what you did on each in [from, to). Pull requests you did nothing on in that
-   * window are left out.
+   * Pull requests you opened, pushed commits to or reviewed, updated since the day before `from`,
+   * with what you did on each in [from, to). Pull requests you only commented on, or did nothing
+   * on in that window, are left out. The commenter search still runs, since it also finds other
+   * people's pull requests you pushed to.
    */
   async fetchMyPullRequestActivity(from: Date, to: Date): Promise<PullRequestActivity[]> {
     const { login } = await this.request<{ login: string }>('/user');
@@ -178,7 +180,9 @@ export class GithubIntegrationService {
     }
     for (const review of reviews) {
       if (review.user?.login === login) {
-        add('review', String(review.id), review.submitted_at);
+        // A review with no verdict is how GitHub stores inline comments: that's commenting.
+        const kind = review.state === 'COMMENTED' ? 'comment' : 'review';
+        add(kind, `review-${review.id}`, review.submitted_at);
       }
     }
     for (const comment of [...reviewComments, ...comments]) {
@@ -187,6 +191,10 @@ export class GithubIntegrationService {
       }
     }
 
+    // Commenting alone doesn't make it your work: you opened it, pushed to it or reviewed it.
+    const worked =
+      pull.user?.login === login ||
+      actions.some((action) => action.kind === 'commit' || action.kind === 'review');
     const activity: PullRequestActivity = {
       repo,
       number: item.number,
@@ -194,7 +202,7 @@ export class GithubIntegrationService {
       body: pull.body ?? '',
       branch: pull.head.ref,
       url: pull.html_url,
-      actions: actions.sort((a, b) => a.at.getTime() - b.at.getTime()),
+      actions: worked ? actions.sort((a, b) => a.at.getTime() - b.at.getTime()) : [],
     };
     this.cache.set(cacheKey, activity);
     return activity;
