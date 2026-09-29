@@ -85,14 +85,16 @@
   align-items: center;
   gap: 0.5rem;
 
-  input {
+  input:not([type='checkbox']) {
     min-width: 6rem;
   }
 }
 
 .weekday-picker {
   display: flex;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  width: 100%;
 
   label {
     display: flex;
