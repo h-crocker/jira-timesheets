@@ -8,6 +8,7 @@ import {
   untracked,
 } from '@angular/core';
 import type {
+  ActivityEvent,
   ActivityIssueSummary,
   CalendarEvent,
   EngineInput,
@@ -27,10 +28,15 @@ import {
   SettingsPanelComponent,
 } from './components/settings-panel/settings-panel';
 import { WeekSelectorComponent } from './components/week-selector/week-selector';
-import { weekEvidence } from './services/activity-distribution';
-import { ActivityService, NO_ACTIVITY, type WeekActivity } from './services/activity.service';
+import {
+  type ActivityWeek,
+  activityAllocations,
+  weekEvidence,
+} from './services/activity-allocations';
+import { ActivityService, type WeekActivity } from './services/activity.service';
 import { JiraIntegrationService } from './services/jira-integration.service';
 import { leaveDayState } from './services/leave-planner';
+import { weekKey } from './services/schedule-time';
 import { SettingsService } from './services/settings.service';
 import { TimesheetEngineService } from './services/timesheet-engine.service';
 
@@ -41,13 +47,15 @@ export type SyncStatus =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'syncing' }
+  | { kind: 'filling' }
   | { kind: 'success'; message: string }
   | { kind: 'error'; message: string };
 
-interface WeekData {
-  worklogs: JiraWorklog[];
-  absorbed: JiraWorklog[];
+/** What the last "Fill allocations from activity" found, to show how it got its numbers. */
+interface Fill {
+  week: string;
   activity: WeekActivity;
+  evidence: ActivityEvent[];
 }
 
 export function startOfWeek(date: Date): Date {
@@ -61,10 +69,6 @@ function addDays(date: Date, days: number): Date {
   const result = new Date(date);
   result.setDate(result.getDate() + days);
   return result;
-}
-
-function weekKey(week: Date): string {
-  return String(week.getTime());
 }
 
 function errorMessage(error: unknown): string {
@@ -94,9 +98,7 @@ export class App {
   readonly credentials = this.settingsService.credentials;
   readonly githubCredentials = this.settingsService.githubCredentials;
   readonly worklogs = signal<JiraWorklog[]>([]);
-  /** Automatic worklogs that earlier syncs of this week replaced. */
-  readonly absorbed = signal<JiraWorklog[]>([]);
-  readonly weekActivity = signal<WeekActivity>(NO_ACTIVITY);
+  private readonly lastFill = signal<Fill | null>(null);
   readonly status = signal<SyncStatus>({ kind: 'idle' });
   /** Leave ticks changed in the preview and not yet synced, by week. */
   private readonly leaveOverrides = signal<Record<string, number[]>>({});
@@ -115,11 +117,19 @@ export class App {
     weekStart: this.currentWeek(),
     settings: this.settings(),
     worklogs: this.worklogs(),
-    activity: this.weekActivity().events,
-    absorbed: this.absorbed(),
     leaveDays: this.leaveEnabled() ? this.leaveDays() : [],
-    now: this.now(),
   }));
+
+  /** The week's own allocations, filled from activity, or null when it uses the usual ones. */
+  readonly weekAllocations = computed(
+    () => this.settings().weekAllocations[weekKey(this.currentWeek())] ?? null,
+  );
+
+  /** The last fill, if it was for the week on show. */
+  private readonly fill = computed(() => {
+    const fill = this.lastFill();
+    return fill !== null && fill.week === weekKey(this.currentWeek()) ? fill : null;
+  });
 
   readonly plan = computed<ExecutionPlan>(() => this.engine.computePlan(this.engineInput()));
 
@@ -162,42 +172,31 @@ export class App {
     return [...existing, ...planned];
   });
 
-  /** The issues the week's evidence points at, with the time each ends up with. */
+  /** The evidence behind each of the week's allocations, from the last fill. */
   readonly activityIssues = computed<ActivityIssueSummary[]>(() => {
-    if (!this.settings().activityMode) {
+    const fill = this.fill();
+    if (fill === null) {
       return [];
     }
-    const plan = this.plan();
-    const deleted = new Set(plan.deletions.map((deletion) => deletion.worklogId));
-    const seconds = new Map<string, number>();
-    const addTime = (issueKey: string, time: number) =>
-      seconds.set(issueKey, (seconds.get(issueKey) ?? 0) + time);
-    for (const worklog of this.weekWorklogs()) {
-      if (!deleted.has(worklog.id)) {
-        addTime(worklog.issueKey, worklog.timeSpentSeconds);
-      }
-    }
-    for (const creation of plan.creations) {
-      addTime(creation.issueKey, creation.timeSpentSeconds);
-    }
-
+    const percentages = new Map(
+      (this.weekAllocations() ?? []).map((allocation) => [
+        allocation.issueKey,
+        allocation.percentage,
+      ]),
+    );
     const issues = new Map<string, ActivityIssueSummary>();
-    const issue = (issueKey: string) => {
-      let entry = issues.get(issueKey);
+    for (const event of fill.evidence) {
+      let entry = issues.get(event.issueKey);
       if (entry === undefined) {
         entry = {
-          issueKey,
-          summary: this.weekActivity().summaries.get(issueKey) ?? '',
-          plannedSeconds: seconds.get(issueKey) ?? 0,
+          issueKey: event.issueKey,
+          summary: fill.activity.summaries.get(event.issueKey) ?? '',
+          percentage: percentages.get(event.issueKey) ?? 0,
           pullRequests: [],
           jiraWorklogs: 0,
         };
-        issues.set(issueKey, entry);
+        issues.set(event.issueKey, entry);
       }
-      return entry;
-    };
-    for (const event of weekEvidence(this.engineInput())) {
-      const entry = issue(event.issueKey);
       if (event.kind === 'jira-worklog') {
         entry.jiraWorklogs++;
         continue;
@@ -210,18 +209,12 @@ export class App {
         pull.actions++;
       }
     }
-    const placeholder = this.settings().placeholderIssueKey.trim();
-    if (placeholder !== '' && (seconds.get(placeholder) ?? 0) > 0) {
-      issue(placeholder);
-    }
-    return [...issues.values()].sort(
-      (a, b) => b.plannedSeconds - a.plannedSeconds || a.issueKey.localeCompare(b.issueKey),
-    );
+    return [...issues.values()];
   });
 
   readonly unkeyedPullRequests = computed<UnkeyedPullRequest[]>(() =>
-    this.weekActivity()
-      .pulls.filter((mapped) => mapped.unkeyed)
+    (this.fill()?.activity.pulls ?? [])
+      .filter((mapped) => mapped.unkeyed)
       .map(({ pull }) => ({
         name: `${pull.repo}#${pull.number}`,
         title: pull.title,
@@ -230,18 +223,16 @@ export class App {
   );
 
   readonly activityWarnings = computed<string[]>(() => {
-    if (!this.settings().activityMode) {
+    const fill = this.fill();
+    if (fill === null) {
       return [];
     }
-    const warnings = [...this.weekActivity().warnings];
-    const placeholder = this.settings().placeholderIssueKey.trim();
-    if (placeholder === '' && this.unkeyedPullRequests().length > 0) {
+    const warnings = [...fill.activity.warnings];
+    if (
+      this.settings().placeholderIssueKey.trim() === '' &&
+      this.unkeyedPullRequests().length > 0
+    ) {
       warnings.push('Some pull requests have no Jira key. Set a placeholder ticket to log them.');
-    }
-    if (placeholder === '' && this.activityIssues().length === 0) {
-      warnings.push(
-        'No activity found this week. Set a placeholder ticket to fill the week anyway.',
-      );
     }
     return warnings;
   });
@@ -257,7 +248,7 @@ export class App {
 
   readonly busy = computed(() => {
     const kind = this.status().kind;
-    return kind === 'loading' || kind === 'syncing';
+    return kind === 'loading' || kind === 'syncing' || kind === 'filling';
   });
 
   private readonly issueKeys = computed(() => {
@@ -266,7 +257,7 @@ export class App {
     for (const schedule of settings.schedules) {
       keys.add(schedule.issueKey);
     }
-    for (const allocation of settings.allocations) {
+    for (const allocation of [...settings.allocations, ...(this.weekAllocations() ?? [])]) {
       keys.add(allocation.issueKey);
     }
     return [...keys]
@@ -276,25 +267,13 @@ export class App {
       .join(',');
   });
 
-  /** Everything that changes what a week load reads. */
-  private readonly loadKey = computed(() => {
-    const settings = this.settings();
-    return JSON.stringify([
-      this.issueKeys(),
-      settings.activityMode,
-      settings.placeholderIssueKey,
-      settings.githubOrgs,
-    ]);
-  });
-
   private loadRequest = 0;
 
   constructor() {
     effect(() => {
       const week = this.currentWeek();
-      this.loadKey();
+      this.issueKeys();
       this.credentials();
-      this.githubCredentials();
       untracked(() => void this.loadWeek(week));
     });
   }
@@ -359,6 +338,61 @@ export class App {
     this.leaveOverrides.update((overrides) => ({ ...overrides, [key]: next }));
   }
 
+  /**
+   * Sets this week's allocations from what you worked on: your GitHub pull requests, Jira's
+   * automatic worklogs, and those earlier syncs replaced.
+   */
+  async fillFromActivity(): Promise<void> {
+    if (this.busy()) {
+      return;
+    }
+    const week = this.currentWeek();
+    const settings = this.settings();
+    this.status.set({ kind: 'filling' });
+    try {
+      const [pulls, absorbed] = await Promise.all([
+        this.activityService.fetchPullRequests(week, addDays(week, 7)),
+        this.jira.fetchReplaced(week),
+      ]);
+      const jiraOnly: ActivityWeek = {
+        weekStart: week,
+        settings,
+        worklogs: this.worklogs(),
+        leaveDays: this.leaveEnabled() ? this.leaveDays() : [],
+        activity: [],
+        absorbed,
+      };
+      const activity = await this.activityService.toEvidence(
+        pulls,
+        settings.placeholderIssueKey,
+        weekEvidence(jiraOnly).map((event) => event.issueKey),
+      );
+      const activityWeek = { ...jiraOnly, activity: activity.events };
+      const allocations = activityAllocations(activityWeek, activity.summaries);
+      this.lastFill.set({ week: weekKey(week), activity, evidence: weekEvidence(activityWeek) });
+      if (allocations.length === 0) {
+        this.status.set({
+          kind: 'error',
+          message: 'No activity found this week. Set a placeholder ticket to fill it anyway.',
+        });
+        return;
+      }
+      this.status.set({ kind: 'idle' });
+      this.settingsService.setWeekAllocations(weekKey(week), allocations);
+    } catch (error) {
+      this.status.set({
+        kind: 'error',
+        message: `Could not fill allocations: ${errorMessage(error)}`,
+      });
+    }
+  }
+
+  /** Goes back to the usual allocations for the week on show. */
+  clearWeekAllocations(): void {
+    this.settingsService.clearWeekAllocations(weekKey(this.currentWeek()));
+    this.lastFill.set(null);
+  }
+
   async reload(): Promise<void> {
     await this.loadWeek(this.currentWeek());
   }
@@ -402,12 +436,7 @@ export class App {
 
   /** Reloads the week's worklogs after a sync; the leave ticks now live in Jira. */
   private async refreshJira(week: Date): Promise<void> {
-    const [worklogs, absorbed] = await Promise.all([
-      this.fetchWorklogs(week),
-      this.settings().activityMode ? this.jira.fetchReplaced(week) : Promise.resolve([]),
-    ]);
-    this.worklogs.set(worklogs);
-    this.absorbed.set(absorbed);
+    this.worklogs.set(await this.fetchWorklogs(week));
     this.leaveOverrides.update((overrides) => {
       const remaining = { ...overrides };
       delete remaining[weekKey(week)];
@@ -419,13 +448,11 @@ export class App {
     const request = ++this.loadRequest;
     this.status.set({ kind: 'loading' });
     try {
-      const data = await this.fetchWeek(week);
+      const worklogs = await this.fetchWorklogs(week);
       if (request !== this.loadRequest) {
         return;
       }
-      this.worklogs.set(data.worklogs);
-      this.absorbed.set(data.absorbed);
-      this.weekActivity.set(data.activity);
+      this.worklogs.set(worklogs);
       this.status.set({ kind: 'idle' });
     } catch (error) {
       if (request !== this.loadRequest) {
@@ -436,24 +463,6 @@ export class App {
         message: `Could not load worklogs: ${errorMessage(error)}`,
       });
     }
-  }
-
-  private async fetchWeek(week: Date): Promise<WeekData> {
-    const settings = this.settings();
-    if (!settings.activityMode) {
-      return { worklogs: await this.fetchWorklogs(week), absorbed: [], activity: NO_ACTIVITY };
-    }
-    const [worklogs, absorbed, pulls] = await Promise.all([
-      this.fetchWorklogs(week),
-      this.jira.fetchReplaced(week),
-      this.activityService.fetchPullRequests(week, addDays(week, 7)),
-    ]);
-    const activity = await this.activityService.toEvidence(
-      pulls,
-      settings.placeholderIssueKey,
-      [...worklogs, ...absorbed].map((worklog) => worklog.issueKey),
-    );
-    return { worklogs, absorbed, activity };
   }
 
   // The user's worklogs anywhere in Jira that week, plus the configured issues so that worklogs

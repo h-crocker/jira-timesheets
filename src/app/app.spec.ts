@@ -3,7 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import mockGithub from '../../mock-github-server';
 import mockServer from '../../mock-jira-server';
 import { App, NOW, startOfWeek } from './app';
-import type { JiraCredentials, WorklogCreation } from './models/domain';
+import type { JiraCredentials } from './models/domain';
 import { JiraIntegrationService } from './services/jira-integration.service';
 import { SettingsService } from './services/settings.service';
 
@@ -29,7 +29,11 @@ describe('App (smart component)', () => {
     if (address === null || typeof address !== 'object') {
       throw new Error('mock server has no address');
     }
-    credentials = { email: 'dev@example.com', apiToken: 'test-token', host: `http://localhost:${address.port}` };
+    credentials = {
+      email: 'dev@example.com',
+      apiToken: 'test-token',
+      host: `http://localhost:${address.port}`,
+    };
   });
 
   afterAll(async () => {
@@ -144,7 +148,11 @@ describe('App (smart component)', () => {
       row.textContent?.includes('GWP-100'),
     );
     expect(rows.length).toBe(2);
-    expect(rows.every((row) => row.querySelector('.source-badge')?.getAttribute('data-source') === 'recurring')).toBe(true);
+    expect(
+      rows.every(
+        (row) => row.querySelector('.source-badge')?.getAttribute('data-source') === 'recurring',
+      ),
+    ).toBe(true);
     expect(q(fixture, 'plan-summary').textContent).toContain('2 to create');
     expect(TestBed.inject(SettingsService).settings().schedules.length).toBe(1);
   });
@@ -172,7 +180,13 @@ describe('App (smart component)', () => {
   it('week navigation changes the displayed week and events', async () => {
     const fixture = await create((settings) =>
       settings.addSchedule({
-        id: 's', issueKey: 'GWP-100', summary: 'Standup', weekdays: [1], startTime: '09:00', durationSeconds: 900, enabled: true,
+        id: 's',
+        issueKey: 'GWP-100',
+        summary: 'Standup',
+        weekdays: [1],
+        startTime: '09:00',
+        durationSeconds: 900,
+        enabled: true,
       }),
     );
     await settle(fixture);
@@ -202,7 +216,13 @@ describe('App (smart component)', () => {
   it('removing a schedule via the panel clears it from the grid', async () => {
     const fixture = await create((settings) =>
       settings.addSchedule({
-        id: 's', issueKey: 'GWP-100', summary: 'Standup', weekdays: [1], startTime: '09:00', durationSeconds: 900, enabled: true,
+        id: 's',
+        issueKey: 'GWP-100',
+        summary: 'Standup',
+        weekdays: [1],
+        startTime: '09:00',
+        durationSeconds: 900,
+        enabled: true,
       }),
     );
     await settle(fixture);
@@ -222,7 +242,13 @@ describe('App (smart component)', () => {
       'Existing entry',
     );
     TestBed.inject(SettingsService).addSchedule({
-      id: 's', issueKey: 'GWP-CLASH', summary: 'Recurring', weekdays: [4], startTime: '10:30', durationSeconds: 1800, enabled: true,
+      id: 's',
+      issueKey: 'GWP-CLASH',
+      summary: 'Recurring',
+      weekdays: [4],
+      startTime: '10:30',
+      durationSeconds: 1800,
+      enabled: true,
     });
     await settle(fixture);
     return fixture;
@@ -231,7 +257,9 @@ describe('App (smart component)', () => {
   it('recurring event overrides a clashing existing worklog (planned deletion)', async () => {
     const fixture = await withClash();
 
-    expect(fixture.componentInstance.plan().deletions.map((d) => d.issueKey)).toEqual(['GWP-CLASH']);
+    expect(fixture.componentInstance.plan().deletions.map((d) => d.issueKey)).toEqual([
+      'GWP-CLASH',
+    ]);
     const thursday = rowsFor(fixture, 'GWP-CLASH', '[data-date="2026-10-01"]');
     expect(thursday.length).toBe(2);
     const [deleted, recurring] = thursday;
@@ -261,7 +289,13 @@ describe('App (smart component)', () => {
   it('syncWeek pushes the plan to the mock, reloads, and leaves nothing to sync', async () => {
     const fixture = await create((settings) =>
       settings.addSchedule({
-        id: 's', issueKey: 'GWP-SYNC', summary: 'Sync test', weekdays: [4], startTime: '14:00', durationSeconds: 1800, enabled: true,
+        id: 's',
+        issueKey: 'GWP-SYNC',
+        summary: 'Sync test',
+        weekdays: [4],
+        startTime: '14:00',
+        durationSeconds: 1800,
+        enabled: true,
       }),
     );
     await settle(fixture);
@@ -288,10 +322,10 @@ describe('App (smart component)', () => {
     expect(q(fixture, 'status').textContent).toContain('Could not load worklogs');
   });
 
-  describe('in activity mode', () => {
-    // Friday evening of the seeded week, so the whole week can be filled.
+  describe('filling allocations from activity', () => {
     const FRIDAY_EVENING = new Date(2026, 9, 2, 18);
     const FULL_DAY = 7.5 * 3600;
+    const WEEK_KEY = '2026-09-28';
     let github: http.Server;
     let githubUrl: string;
 
@@ -315,13 +349,26 @@ describe('App (smart component)', () => {
       });
     });
 
-    async function activity(seed?: (settings: SettingsService) => void) {
+    async function setUp(seed?: (settings: SettingsService) => void) {
       const fixture = await create((settings) => {
-        settings.updateSettings({ activityMode: true, leaveIssueKey: 'HR-1' });
+        settings.updateSettings({
+          leaveIssueKey: 'HR-1',
+          allocations: [{ id: 'u', issueKey: 'GWP-9', summary: 'Usual', percentage: 100 }],
+        });
         seed?.(settings);
       });
       await settle(fixture);
       return fixture;
+    }
+
+    const withGithub = (settings: SettingsService) => {
+      settings.setGithubCredentials({ token: 'token', apiUrl: githubUrl });
+      settings.updateSettings({ placeholderIssueKey: 'GWP-100' });
+    };
+
+    async function fill(fixture: Awaited<ReturnType<typeof create>>) {
+      q(fixture, 'fill-from-activity').click();
+      await settle(fixture);
     }
 
     async function sync(fixture: Awaited<ReturnType<typeof create>>) {
@@ -329,77 +376,142 @@ describe('App (smart component)', () => {
       await settle(fixture);
     }
 
-    const secondsFrom = (creations: WorklogCreation[], source: WorklogCreation['source']) =>
-      creations
-        .filter((creation) => creation.source === source)
-        .reduce((sum, creation) => sum + creation.timeSpentSeconds, 0);
+    const weekAllocations = () => TestBed.inject(SettingsService).settings().weekAllocations;
 
     const nothingToSync = (fixture: Awaited<ReturnType<typeof create>>) => {
       expect(q(fixture, 'plan-summary').textContent).toContain('0 to create, 0 to delete');
       expect((q(fixture, 'sync') as HTMLButtonElement).disabled).toBe(true);
     };
 
-    it('fills the week from the automatic worklogs, replaces them, and then has nothing to sync', async () => {
-      const fixture = await activity();
+    it('uses the usual allocations, and reads nothing from GitHub, until you press the button', async () => {
+      const realFetch = globalThis.fetch;
+      const urls: string[] = [];
+      const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+        urls.push(String(input));
+        return realFetch(input, init);
+      });
+      let fixture: Awaited<ReturnType<typeof create>>;
+      try {
+        fixture = await setUp(withGithub);
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(urls.some((url) => url.startsWith(githubUrl))).toBe(false);
+      expect(q(fixture, 'activity-panel').textContent).toContain(
+        'This week uses your usual allocations.',
+      );
+      const plan = fixture.componentInstance.plan();
+      expect(new Set(plan.creations.map((creation) => creation.issueKey))).toEqual(
+        new Set(['GWP-9']),
+      );
+      // Without the week's own allocations, automatic worklogs are kept as they are.
+      expect(plan.deletions).toEqual([]);
+    });
+
+    it("fills the week's allocations from GitHub and Jira, then replaces the automatic worklogs", async () => {
+      const fixture = await setUp(withGithub);
+      await fill(fixture);
       const app = fixture.componentInstance;
 
-      expect(app.plan().deletions.map((deletion) => deletion.reason)).toEqual(
+      const allocations = weekAllocations()[WEEK_KEY];
+      expect(Object.keys(weekAllocations())).toEqual([WEEK_KEY]);
+      expect(allocations.map((allocation) => allocation.issueKey).sort()).toEqual([
+        'GWP-100',
+        'GWP-2070',
+        'GWP-2080',
+      ]);
+      expect(allocations.reduce((sum, allocation) => sum + allocation.percentage, 0)).toBe(100);
+      expect(allocations.find((a) => a.issueKey === 'GWP-2070')?.summary).toBe(
+        'Rate limiting for the public API',
+      );
+      const row = q(fixture, 'week-allocation-GWP-2070');
+      expect(row.textContent).toContain('acme/api#41');
+      expect(row.textContent).toContain('automatic worklog');
+      const unkeyed = Array.from(
+        root(fixture).querySelectorAll('[data-testid="unkeyed-pull-request"] a'),
+      ).map((link) => link.textContent);
+      expect(unkeyed.sort()).toEqual(['acme/tools#7', 'personal/dotfiles#3']);
+      // A pull request you only commented on is not your work.
+      expect(q(fixture, 'activity-panel').textContent).not.toContain('acme/web#60');
+
+      const plan = app.plan();
+      expect(plan.deletions.map((deletion) => deletion.reason)).toEqual(
         Array(5).fill('replaced-by-activity'),
       );
-      expect(app.plan().deletions.map((deletion) => deletion.issueKey)).not.toContain('HR-1');
-      expect(root(fixture).querySelectorAll('[data-pending-deletion="true"]').length).toBe(5);
-      // Every working hour except Friday morning's leave, logged by hand.
-      expect(secondsFrom(app.plan().creations, 'activity')).toBe(5 * FULL_DAY - 13500);
-      expect(q(fixture, 'activity-warning').textContent).toContain("GitHub isn't set up");
-      expect(q(fixture, 'activity-GWP-2070').textContent).toContain('automatic worklog');
+      expect(new Set(plan.creations.map((creation) => creation.issueKey))).toEqual(
+        new Set(['GWP-100', 'GWP-2070', 'GWP-2080']),
+      );
+      expect(plan.creations.every((creation) => creation.source === 'allocated')).toBe(true);
 
       await sync(fixture);
       expect(q(fixture, 'status').textContent).toMatch(/Synced: \d+ created, 5 deleted/);
       nothingToSync(fixture);
       const replaced = await TestBed.inject(JiraIntegrationService).fetchReplaced(WEEK);
-      expect(replaced.map((worklog) => worklog.comment).sort()).toEqual([
-        'Code review',
-        'Logged on Done',
-        'Logged on Done',
-        'Support ticket',
-        'Work on feature',
-      ]);
+      expect(replaced).toHaveLength(5);
       expect(app.worklogs().some((worklog) => worklog.comment === 'Leave (morning)')).toBe(true);
 
-      await app.reload();
-      await settle(fixture);
+      // Filling again finds the replaced worklogs saved in Jira, so nothing changes.
+      await fill(fixture);
+      expect(weekAllocations()[WEEK_KEY]).toEqual(allocations);
       nothingToSync(fixture);
     });
 
-    it('replaces an automatic worklog that appears after a sync', async () => {
-      const fixture = await activity();
-      await sync(fixture);
-      await fetch(`${credentials.host}/rest/api/3/issue/GWP-2080/worklog`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Basic ${btoa('dev@example.com:token')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ started: '2026-09-30T10:00:00.000+0000', timeSpentSeconds: 900 }),
-      });
-
-      await fixture.componentInstance.reload();
+    it('goes back to the usual allocations', async () => {
+      const fixture = await setUp(withGithub);
+      await fill(fixture);
+      q(fixture, 'clear-week-allocations').click();
       await settle(fixture);
-      const newest = fixture.componentInstance
-        .worklogs()
-        .find((worklog) => !worklog.generated && worklog.issueKey === 'GWP-2080');
-      expect(fixture.componentInstance.plan().deletions).toContainEqual({
-        worklogId: newest!.id,
-        issueKey: 'GWP-2080',
-        reason: 'replaced-by-activity',
-      });
 
-      await sync(fixture);
-      nothingToSync(fixture);
+      expect(weekAllocations()).toEqual({});
+      expect(q(fixture, 'activity-panel').textContent).toContain(
+        'This week uses your usual allocations.',
+      );
+      expect(fixture.componentInstance.plan().deletions).toEqual([]);
+    });
+
+    it('fills from Jira alone without GitHub, and says so', async () => {
+      const fixture = await setUp();
+      await fill(fixture);
+      expect(q(fixture, 'activity-warning').textContent).toContain("GitHub isn't set up");
+      expect(
+        weekAllocations()
+          [WEEK_KEY].map((allocation) => allocation.issueKey)
+          .sort(),
+      ).toEqual(['GWP-2070', 'GWP-2080']);
+    });
+
+    it('reports a week with no activity and no placeholder ticket', async () => {
+      const fixture = await setUp();
+      q(fixture, 'next-week').click();
+      await settle(fixture);
+      await fill(fixture);
+      expect(q(fixture, 'status').textContent).toContain('No activity found this week');
+      expect(weekAllocations()).toEqual({});
+    });
+
+    it('fills with GET requests only, none of which fail', async () => {
+      const fixture = await setUp(withGithub);
+      const realFetch = globalThis.fetch;
+      const requests: string[] = [];
+      const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const response = await realFetch(input, init);
+        requests.push(`${init?.method ?? 'GET'} ${response.status} ${String(input)}`);
+        return response;
+      });
+      try {
+        await fill(fixture);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(requests.length).toBeGreaterThan(0);
+      // Jira Cloud refused a POST from the browser with 403, and a 404 read as an error.
+      expect(requests.filter((request) => !request.startsWith('GET 200 '))).toEqual([]);
     });
 
     it('loses no evidence when a sync fails part-way', async () => {
-      const fixture = await activity();
+      const fixture = await setUp();
+      await fill(fixture);
       const jira = TestBed.inject(JiraIntegrationService);
       const realDelete = jira.deleteWorklog.bind(jira);
       let calls = 0;
@@ -413,7 +525,7 @@ describe('App (smart component)', () => {
       await sync(fixture);
       spy.mockRestore();
       expect(q(fixture, 'status').textContent).toContain('Sync failed: Network down');
-      // The replaced worklogs were saved first, so the plan is unchanged: only deletions remain.
+      expect(await jira.fetchReplaced(WEEK)).toHaveLength(5);
       const plan = fixture.componentInstance.plan();
       expect(plan.creations).toEqual([]);
       expect(plan.deletions.map((deletion) => deletion.reason)).toEqual(
@@ -426,17 +538,15 @@ describe('App (smart component)', () => {
     });
 
     it('logs a day ticked as leave, remembers the tick through Jira, and removes it when unticked', async () => {
-      const fixture = await activity();
+      const fixture = await setUp();
       const app = fixture.componentInstance;
       const tick = (weekday: number) =>
         root(fixture).querySelector<HTMLInputElement>(`[data-testid="leave-${weekday}"]`)!;
-      const thursday = (creation: WorklogCreation) =>
-        new Date(creation.started).getDate() === 1;
       expect(tick(4).checked).toBe(false);
 
       tick(4).click();
       fixture.detectChanges();
-      expect(app.plan().creations.filter(thursday)).toEqual([
+      expect(app.plan().creations.filter((creation) => creation.source === 'leave')).toEqual([
         {
           issueKey: 'HR-1',
           started: new Date(2026, 9, 1, 9).toISOString(),
@@ -452,61 +562,9 @@ describe('App (smart component)', () => {
 
       tick(4).click();
       fixture.detectChanges();
-      // Thursday's evidence counted toward Wednesday while Thursday was leave, so Wednesday's
-      // worklogs change back too; only the app's own worklogs are touched.
-      expect(app.plan().deletions).toContainEqual(
+      expect(app.plan().deletions).toEqual([
         expect.objectContaining({ issueKey: 'HR-1', reason: 'stale-generated' }),
-      );
-      expect(app.plan().deletions.every((deletion) => deletion.reason === 'stale-generated')).toBe(
-        true,
-      );
-      expect(app.plan().creations.filter(thursday).every((c) => c.source === 'activity')).toBe(true);
-    });
-
-    it('loads a week with GET requests only, none of which fail', async () => {
-      const realFetch = globalThis.fetch;
-      const requests: string[] = [];
-      const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-        const response = await realFetch(input, init);
-        requests.push(`${init?.method ?? 'GET'} ${response.status} ${String(input)}`);
-        return response;
-      });
-      try {
-        await activity((settings) => {
-          settings.setGithubCredentials({ token: 'token', apiUrl: githubUrl });
-          settings.updateSettings({ placeholderIssueKey: 'GWP-100' });
-        });
-      } finally {
-        spy.mockRestore();
-      }
-      expect(requests.length).toBeGreaterThan(0);
-      // Jira Cloud refused a POST from the browser with 403, and a 404 read as an error.
-      expect(requests.filter((request) => !request.startsWith('GET 200 '))).toEqual([]);
-    });
-
-    it('adds GitHub pull requests, sending those with no Jira key to the placeholder', async () => {
-      const fixture = await activity((settings) => {
-        settings.setGithubCredentials({ token: 'token', apiUrl: githubUrl });
-        settings.updateSettings({ placeholderIssueKey: 'GWP-100' });
-      });
-
-      expect(root(fixture).querySelector('[data-testid="activity-warning"]')).toBeNull();
-      expect(q(fixture, 'activity-GWP-2070').textContent).toContain('acme/api#41');
-      expect(q(fixture, 'activity-GWP-2070').textContent).toContain('Rate limiting for the public API');
-      expect(q(fixture, 'activity-GWP-2080').textContent).toContain('acme/web#52');
-      expect(q(fixture, 'activity-GWP-100')).toBeTruthy();
-      const unkeyed = Array.from(
-        root(fixture).querySelectorAll('[data-testid="unkeyed-pull-request"] a'),
-      ).map((link) => link.textContent);
-      expect(unkeyed.sort()).toEqual(['acme/tools#7', 'personal/dotfiles#3']);
-      // A pull request you only commented on is not your work.
-      expect(q(fixture, 'activity-panel').textContent).not.toContain('acme/web#60');
-      expect(root(fixture).querySelector('[data-testid="activity-GWP-2090"]')).toBeNull();
-      const comments = fixture.componentInstance.plan().creations.map((creation) => creation.comment);
-      expect(comments.some((comment) => comment?.includes('acme/api#41 Add rate limiting'))).toBe(true);
-
-      await sync(fixture);
-      nothingToSync(fixture);
+      ]);
     });
   });
 });

@@ -1,5 +1,9 @@
-import { Component, input } from '@angular/core';
-import type { ActivityIssueSummary, UnkeyedPullRequest } from '../../models/domain';
+import { Component, computed, input, output } from '@angular/core';
+import type {
+  ActivityIssueSummary,
+  PercentageAllocation,
+  UnkeyedPullRequest,
+} from '../../models/domain';
 
 @Component({
   selector: 'app-activity-panel',
@@ -7,17 +11,21 @@ import type { ActivityIssueSummary, UnkeyedPullRequest } from '../../models/doma
   styleUrl: './activity-panel.scss',
 })
 export class ActivityPanelComponent {
-  issues = input.required<ActivityIssueSummary[]>();
+  /** The week's own allocations, filled from activity, or null when it uses the usual ones. */
+  weekAllocations = input<PercentageAllocation[] | null>(null);
+  /** The evidence behind the last fill of this week, by issue. */
+  issues = input<ActivityIssueSummary[]>([]);
   unkeyedPullRequests = input<UnkeyedPullRequest[]>([]);
   placeholderIssueKey = input('');
   warnings = input<string[]>([]);
+  busy = input(false);
 
-  protected hours(seconds: number): string {
-    const minutes = Math.round(seconds / 60);
-    const whole = Math.floor(minutes / 60);
-    const rest = minutes % 60;
-    return rest === 0 ? `${whole}h` : `${whole}h ${rest}m`;
-  }
+  fill = output<void>();
+  clear = output<void>();
+
+  protected readonly evidence = computed(
+    () => new Map(this.issues().map((issue) => [issue.issueKey, issue])),
+  );
 
   protected plural(count: number, noun: string): string {
     return `${count} ${noun}${count === 1 ? '' : 's'}`;

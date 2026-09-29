@@ -10,7 +10,7 @@ const SETTINGS: UserSettings = {
   schedules: [
     { id: 's1', issueKey: 'GWP-1', summary: 'Standup', weekdays: [1, 3], startTime: '09:30', durationSeconds: 900, enabled: true },
   ],
-  activityMode: false,
+  weekAllocations: {},
   leaveIssueKey: '',
   placeholderIssueKey: '',
   githubOrgs: [],
@@ -137,9 +137,7 @@ describe('SettingsPanelComponent', () => {
     const emitted: unknown[] = [];
     fixture.componentInstance.activitySettingsChanged.subscribe((v) => emitted.push(v));
 
-    expect(q<HTMLInputElement>(fixture, 'activity-mode').checked).toBe(false);
     expect(q<HTMLInputElement>(fixture, 'github-orgs').value).toBe('acme');
-    q<HTMLInputElement>(fixture, 'activity-mode').click();
     type(q<HTMLInputElement>(fixture, 'leave-issue-key'), ' HR-1 ');
     type(q<HTMLInputElement>(fixture, 'placeholder-issue-key'), 'GWP-100');
     type(q<HTMLInputElement>(fixture, 'github-orgs'), 'acme, widgets  ');
@@ -147,7 +145,6 @@ describe('SettingsPanelComponent', () => {
 
     expect(emitted).toEqual([
       {
-        activityMode: true,
         leaveIssueKey: 'HR-1',
         placeholderIssueKey: 'GWP-100',
         githubOrgs: ['acme', 'widgets'],

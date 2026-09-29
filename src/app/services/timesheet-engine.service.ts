@@ -3,10 +3,10 @@ import type {
   CalendarEvent,
   EngineInput,
   ExecutionPlan,
+  JiraWorklog,
   WorklogCreation,
   WorklogDeletion,
 } from '../models/domain';
-import { planFromActivity } from './activity-distribution';
 import { clashesWithLeave, planLeave } from './leave-planner';
 import {
   BLOCK_SECONDS,
@@ -18,18 +18,40 @@ import {
   matchRecorded,
   overlaps,
   recurringEvents,
+  sameMinute,
+  weekKey,
 } from './schedule-time';
+
+function toEvent(worklog: JiraWorklog): CalendarEvent {
+  return {
+    id: worklog.id,
+    issueKey: worklog.issueKey,
+    summary: worklog.comment ?? worklog.issueKey,
+    start: worklog.started,
+    end: new Date(worklog.started.getTime() + worklog.timeSpentSeconds * 1000),
+    timeSpentSeconds: worklog.timeSpentSeconds,
+    source: 'jira',
+    worklogId: worklog.id,
+  };
+}
 
 @Injectable({ providedIn: 'root' })
 export class TimesheetEngineService {
+  /**
+   * Recurring events win over clashing worklogs, leave wins over both, and allocations fill the
+   * rest of the week.
+   *
+   * A week whose allocations were filled from activity (`settings.weekAllocations`) uses those and
+   * replaces what Jira logged automatically: every worklog that isn't the app's own, leave or a
+   * recorded recurring event is deleted, and the app's own worklogs stay only while the allocations
+   * still produce them. Either way, syncing twice changes nothing.
+   */
   computePlan(input: EngineInput): ExecutionPlan {
-    return input.settings.activityMode ? planFromActivity(input) : this.planFromAllocations(input);
-  }
-
-  /** Recurring events win over clashing worklogs, leave wins over both, allocations fill the rest. */
-  private planFromAllocations(input: EngineInput): ExecutionPlan {
     const { weekStart, settings } = input;
     const weekEnd = addDays(weekStart, 7);
+    const ownAllocations = settings.weekAllocations[weekKey(weekStart)];
+    const replacing = ownAllocations !== undefined;
+    const allocations = ownAllocations ?? settings.allocations;
     const worklogs = input.worklogs.filter(
       (worklog) => worklog.started >= weekStart && worklog.started < weekEnd,
     );
@@ -37,43 +59,40 @@ export class TimesheetEngineService {
     const recurringEventsThisWeek = recurringEvents(weekStart, settings).filter(
       (event) => !clashesWithLeave(event, leave),
     );
-
-    const jiraEvents: CalendarEvent[] = worklogs
-      .filter((worklog) => !leave.handled.has(worklog.id))
-      .map((worklog) => ({
-        id: worklog.id,
-        issueKey: worklog.issueKey,
-        summary: worklog.comment ?? worklog.issueKey,
-        start: worklog.started,
-        end: new Date(worklog.started.getTime() + worklog.timeSpentSeconds * 1000),
-        timeSpentSeconds: worklog.timeSpentSeconds,
-        source: 'jira' as const,
-        worklogId: worklog.id,
-      }));
+    const others = worklogs.filter((worklog) => !leave.handled.has(worklog.id));
 
     // A worklog that already records a recurring event (same issue, start and duration) satisfies
     // it, so syncing again neither deletes it nor logs the event twice.
-    const { recorded, unrecorded } = matchRecorded(
-      recurringEventsThisWeek,
-      worklogs.filter((worklog) => !leave.handled.has(worklog.id)),
-    );
+    const { recorded, unrecorded } = matchRecorded(recurringEventsThisWeek, others);
 
     const deletions: WorklogDeletion[] = [...leave.deletions];
+    const absorb: JiraWorklog[] = [];
+    const replaceable: JiraWorklog[] = [];
     const keptJiraEvents: CalendarEvent[] = [];
-    for (const jiraEvent of jiraEvents) {
-      if (recorded.has(jiraEvent.id)) {
+    for (const worklog of others) {
+      if (recorded.has(worklog.id)) {
         continue;
       }
-      if (recurringEventsThisWeek.some((recurring) => overlaps(recurring, jiraEvent))) {
+      const jiraEvent = toEvent(worklog);
+      if (replacing && worklog.generated) {
+        replaceable.push(worklog);
+      } else if (replacing) {
         deletions.push({
-          worklogId: jiraEvent.worklogId ?? jiraEvent.id,
-          issueKey: jiraEvent.issueKey,
+          worklogId: worklog.id,
+          issueKey: worklog.issueKey,
+          reason: 'replaced-by-activity',
+        });
+        absorb.push(worklog);
+      } else if (recurringEventsThisWeek.some((recurring) => overlaps(recurring, jiraEvent))) {
+        deletions.push({
+          worklogId: worklog.id,
+          issueKey: worklog.issueKey,
           reason: 'overlap-with-recurring',
         });
       } else if (leave.intervals.some((interval) => overlaps(interval, jiraEvent))) {
         deletions.push({
-          worklogId: jiraEvent.worklogId ?? jiraEvent.id,
-          issueKey: jiraEvent.issueKey,
+          worklogId: worklog.id,
+          issueKey: worklog.issueKey,
           reason: 'overlap-with-leave',
         });
       } else {
@@ -101,12 +120,13 @@ export class TimesheetEngineService {
     const occupiedSeconds = occupied.reduce((sum, interval) => sum + durationSeconds(interval), 0);
     const remaining = totalWeekCapacitySeconds - occupiedSeconds;
 
+    const allocated: WorklogCreation[] = [];
     if (remaining > 0) {
       const daySlots = settings.workDays
         .map((weekday) => daySlot(weekStart, weekday, settings))
         .sort((a, b) => a.start.getTime() - b.start.getTime());
 
-      for (const allocation of settings.allocations) {
+      for (const allocation of allocations) {
         let allocationRemaining = remaining * (allocation.percentage / 100);
         for (const slot of daySlots) {
           if (allocationRemaining <= 0) {
@@ -122,7 +142,7 @@ export class TimesheetEngineService {
               continue;
             }
             const chunkStart = gap.start;
-            creations.push({
+            allocated.push({
               issueKey: allocation.issueKey,
               started: chunkStart.toISOString(),
               timeSpentSeconds: rounded,
@@ -139,7 +159,33 @@ export class TimesheetEngineService {
       }
     }
 
+    // When replacing, the app's own worklogs that match the fill stay; the rest go.
+    const kept = new Set<string>();
+    for (const want of allocated) {
+      const existing = replaceable.find(
+        (worklog) =>
+          !kept.has(worklog.id) &&
+          worklog.issueKey === want.issueKey &&
+          sameMinute(worklog.started, new Date(want.started)) &&
+          worklog.timeSpentSeconds === want.timeSpentSeconds,
+      );
+      if (existing === undefined) {
+        creations.push(want);
+      } else {
+        kept.add(existing.id);
+      }
+    }
+    for (const worklog of replaceable) {
+      if (!kept.has(worklog.id)) {
+        deletions.push({
+          worklogId: worklog.id,
+          issueKey: worklog.issueKey,
+          reason: 'stale-generated',
+        });
+      }
+    }
+
     creations.sort((a, b) => a.started.localeCompare(b.started));
-    return { deletions, creations, absorb: [] };
+    return { deletions, creations, absorb };
   }
 }

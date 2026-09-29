@@ -12,7 +12,7 @@ const DEFAULT_GITHUB_API_URL = 'https://api.github.com';
 
 export type ActivitySettingsChange = Pick<
   UserSettings,
-  'activityMode' | 'leaveIssueKey' | 'placeholderIssueKey' | 'githubOrgs'
+  'leaveIssueKey' | 'placeholderIssueKey' | 'githubOrgs'
 >;
 
 @Component({
@@ -50,7 +50,6 @@ export class SettingsPanelComponent {
   protected readonly schedStartTime = signal('');
   protected readonly schedDurationHours = signal(0);
 
-  protected readonly activityMode = signal<boolean | null>(null);
   protected readonly leaveIssueKey = signal<string | null>(null);
   protected readonly placeholderIssueKey = signal<string | null>(null);
   protected readonly githubOrgs = signal<string | null>(null);
@@ -181,10 +180,6 @@ export class SettingsPanelComponent {
     this.scheduleRemoved.emit(id);
   }
 
-  protected effectiveActivityMode(): boolean {
-    return this.activityMode() ?? this.settings().activityMode;
-  }
-
   protected effectiveLeaveIssueKey(): string {
     return this.leaveIssueKey() ?? this.settings().leaveIssueKey;
   }
@@ -195,10 +190,6 @@ export class SettingsPanelComponent {
 
   protected effectiveGithubOrgs(): string {
     return this.githubOrgs() ?? this.settings().githubOrgs.join(', ');
-  }
-
-  protected toggleActivityMode(): void {
-    this.activityMode.set(!this.effectiveActivityMode());
   }
 
   protected onLeaveIssueKeyInput(event: Event): void {
@@ -215,7 +206,6 @@ export class SettingsPanelComponent {
 
   protected saveActivitySettings(): void {
     this.activitySettingsChanged.emit({
-      activityMode: this.effectiveActivityMode(),
       leaveIssueKey: this.effectiveLeaveIssueKey().trim(),
       placeholderIssueKey: this.effectivePlaceholderIssueKey().trim(),
       githubOrgs: this.effectiveGithubOrgs()

@@ -44,18 +44,9 @@
 
   <section class="section">
     <h2>Activity</h2>
-    <label class="toggle">
-      <input
-        type="checkbox"
-        data-testid="activity-mode"
-        [checked]="effectiveActivityMode()"
-        (change)="toggleActivityMode()"
-      />
-      Fill my week from activity
-    </label>
     <p class="hint">
-      Splits each day between the issues you worked on, from GitHub and Jira's automatic worklogs,
-      and replaces those automatic worklogs.
+      <strong>Fill allocations from activity</strong>, under the calendar, sets a week's
+      allocations from your GitHub pull requests and Jira's automatic worklogs.
     </p>
     <label class="field">
       <span>Leave ticket</span>

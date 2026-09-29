@@ -18,7 +18,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   workDays: [1, 2, 3, 4, 5],
   allocations: [],
   schedules: [],
-  activityMode: false,
+  weekAllocations: {},
   leaveIssueKey: '',
   placeholderIssueKey: '',
   githubOrgs: [],
@@ -35,6 +35,7 @@ function defaultSettings(): UserSettings {
     allocations: [],
     schedules: [],
     githubOrgs: [],
+    weekAllocations: {},
   };
 }
 
@@ -67,6 +68,20 @@ export class SettingsService {
       allocations: current.allocations.filter((item) => item.id !== id),
     }));
     this.persistSettings(this.settings());
+  }
+
+  /** Allocations for one week only, by its Monday (yyyy-mm-dd), used instead of the usual ones. */
+  setWeekAllocations(week: string, allocations: PercentageAllocation[]): void {
+    this.updateSettings({
+      weekAllocations: { ...this.settings().weekAllocations, [week]: allocations },
+    });
+  }
+
+  /** Goes back to the usual allocations for the week. */
+  clearWeekAllocations(week: string): void {
+    const weekAllocations = { ...this.settings().weekAllocations };
+    delete weekAllocations[week];
+    this.updateSettings({ weekAllocations });
   }
 
   setSchedules(schedules: RecurringSchedule[]): void {
@@ -132,8 +147,12 @@ export class SettingsService {
     if (Array.isArray(raw['schedules'])) {
       settings.schedules = raw['schedules'] as RecurringSchedule[];
     }
-    if (typeof raw['activityMode'] === 'boolean') {
-      settings.activityMode = raw['activityMode'];
+    if (isRecord(raw['weekAllocations'])) {
+      for (const [week, allocations] of Object.entries(raw['weekAllocations'])) {
+        if (Array.isArray(allocations)) {
+          settings.weekAllocations[week] = allocations as PercentageAllocation[];
+        }
+      }
     }
     if (typeof raw['leaveIssueKey'] === 'string') {
       settings.leaveIssueKey = raw['leaveIssueKey'];

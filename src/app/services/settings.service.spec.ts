@@ -10,10 +10,17 @@ const DEFAULTS = {
   workDays: [1, 2, 3, 4, 5],
   allocations: [],
   schedules: [],
-  activityMode: false,
+  weekAllocations: {},
   leaveIssueKey: '',
   placeholderIssueKey: '',
   githubOrgs: [],
+};
+
+const ALLOCATION: PercentageAllocation = {
+  id: 'activity-GWP-1',
+  issueKey: 'GWP-1',
+  summary: 'Work',
+  percentage: 100,
 };
 
 describe('SettingsService', () => {
@@ -151,18 +158,31 @@ describe('SettingsService', () => {
     localStorage.setItem(
       SETTINGS_KEY,
       JSON.stringify({
-        activityMode: true,
         leaveIssueKey: 'HR-1',
         placeholderIssueKey: 42,
         githubOrgs: ['acme', 7],
+        weekAllocations: { '2026-09-28': [ALLOCATION], '2026-10-05': 'nope' },
       }),
     );
     expect(new SettingsService().settings()).toEqual({
       ...DEFAULTS,
-      activityMode: true,
       leaveIssueKey: 'HR-1',
       githubOrgs: ['acme'],
+      weekAllocations: { '2026-09-28': [ALLOCATION] },
     });
+  });
+
+  it("sets and clears one week's allocations, leaving the others", () => {
+    const service = new SettingsService();
+    service.setWeekAllocations('2026-09-28', [ALLOCATION]);
+    service.setWeekAllocations('2026-10-05', []);
+    service.clearWeekAllocations('2026-10-05');
+
+    expect(service.settings().weekAllocations).toEqual({ '2026-09-28': [ALLOCATION] });
+    expect(new SettingsService().settings().weekAllocations).toEqual({
+      '2026-09-28': [ALLOCATION],
+    });
+    expect(service.settings().allocations).toEqual([]);
   });
 
   it('keeps the GitHub token apart from the Jira credentials', () => {

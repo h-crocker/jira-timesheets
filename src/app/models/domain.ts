@@ -5,7 +5,7 @@ export interface CalendarEvent {
   start: Date;
   end: Date;
   timeSpentSeconds: number;
-  source: 'jira' | 'recurring' | 'allocated' | 'activity' | 'leave';
+  source: 'jira' | 'recurring' | 'allocated' | 'leave';
   worklogId?: string;
   /** An existing worklog the plan deletes. */
   pendingDeletion?: boolean;
@@ -34,8 +34,11 @@ export interface UserSettings {
   workDays: number[];
   allocations: PercentageAllocation[];
   schedules: RecurringSchedule[];
-  /** Fill the week from GitHub and Jira activity, replacing the worklogs Jira added automatically. */
-  activityMode: boolean;
+  /**
+   * Allocations filled from a week's activity, by the week's Monday (yyyy-mm-dd). A week listed here
+   * uses them instead of `allocations`, and its sync replaces the worklogs Jira added automatically.
+   */
+  weekAllocations: Record<string, PercentageAllocation[]>;
   /** The ticket leave is logged to. Worklogs on it are never replaced. */
   leaveIssueKey: string;
   /** Generic work ticket for pull requests with no Jira key, and weeks with no activity. */
@@ -109,22 +112,16 @@ export interface EngineInput {
   weekStart: Date;
   settings: UserSettings;
   worklogs: JiraWorklog[];
-  /** Evidence from GitHub (activity mode). */
-  activity?: ActivityEvent[];
-  /** Automatic worklogs replaced by earlier syncs (activity mode). */
-  absorbed?: JiraWorklog[];
   /** Weekdays marked as leave, 1 = Monday, as in `workDays`. */
   leaveDays?: number[];
-  /** Activity mode leaves days after this one alone. Defaults to the end of the week. */
-  now?: Date;
 }
 
 /** One issue the week's evidence points at, as the activity panel shows it. */
 export interface ActivityIssueSummary {
   issueKey: string;
   summary: string;
-  /** Time on the issue once the plan is synced. */
-  plannedSeconds: number;
+  /** Its share of the week's allocations. */
+  percentage: number;
   pullRequests: Array<{ name: string; url?: string; actions: number }>;
   jiraWorklogs: number;
 }

@@ -1,8 +1,8 @@
 # Jira Timesheets
 
 Zoneless Angular 22 app that fills a week of Jira worklogs, then syncs it to Jira (or to local mock
-servers). It can fill the week from what you actually did, from your GitHub pull requests and the worklogs
-Jira adds automatically, or from recurring schedules and percentage allocations.
+servers), from recurring schedules and percentage allocations. A button sets a week's allocations from what
+you actually did: your GitHub pull requests and the worklogs Jira adds automatically.
 
 Requires Node.js >= 22.22.3 (the Angular CLI refuses older 22.x releases).
 
@@ -35,28 +35,30 @@ To try the sync without touching real timesheets, use a free Atlassian Cloud dev
 If requests fail, the `npm start` terminal shows the relay's error. A 401 means Jira rejected the email or
 token. Behind a TLS-inspecting corporate proxy, start the app with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`.
 
-## Filling the week from your activity
+## Filling allocations from your activity
 
-Tick **Fill my week from activity** in the **Activity** section of the settings panel. The app then works
-out what you worked on each day from:
+Under the calendar, **Fill allocations from activity** sets the allocations for the week on screen from
+what you worked on that week:
 
-- **GitHub**: pull requests you opened, committed to or reviewed (approved or requested changes) that
-  week. Your comments on those add to them, but a pull request you only commented on doesn't count;
+- **GitHub**: pull requests you opened, committed to or reviewed (approved or requested changes). Your
+  comments on those add to them, but a pull request you only commented on doesn't count.
 - **Jira**: the worklogs Jira added for you automatically, e.g. when an issue moved to Done.
 
-Each working day (your hours, less recurring meetings and leave) is split into 15-minute blocks and shared
-between the issues with evidence that day, weighted by how much you did on each. Allocations still take
-their percentage of each day. Quiet days between two days on the same issue count as work on it; other
-days with no evidence follow the week as a whole. Days after today are left alone.
+Each kind of evidence has a weight, capped per issue per day, and a quiet day between two days on the same
+issue counts as a little work on it. The weights become whole percentages that add up to 100. The week then
+uses those allocations instead of your usual ones; other weeks are unaffected. **Use my usual allocations**
+goes back.
 
-The automatic worklogs are **replaced**: the plan deletes them (shown struck through in the preview) and
-logs the planned worklogs instead. Before deleting them, the sync saves a copy in a Jira user property on
-your account (`jira-timesheets.replaced.<Monday's date>`), so they still count as evidence later and
-syncing twice changes nothing. Anything else the app didn't create is treated the same way, except leave.
+A week with its own allocations **replaces** Jira's automatic worklogs: the plan deletes them (shown struck
+through in the preview) and allocations fill the whole week. Before deleting them, the sync saves a copy in
+a Jira user property on your account (`jira-timesheets.replaced.<Monday's date>`), so pressing the button
+again later still counts them. Anything else you logged that isn't leave or a recurring meeting is treated
+the same way. The app's own worklogs are re-planned if the week's allocations change, and syncing twice
+changes nothing. Weeks using your usual allocations keep existing worklogs as they are.
 
 **Jira keys** come from the pull request title (a leading key first), then Jira links and keys in the
 description, then the branch name. Keys are checked against Jira. A pull request with no valid key goes to
-the **placeholder ticket**, your generic work ticket, which also fills a week with no evidence at all.
+the **placeholder ticket**, your generic work ticket, which also takes a week with no evidence at all.
 
 **Leave**: set the **leave ticket**. Leave logged on it by hand is never touched, and meetings that clash
 with it are not logged. Tick **On leave** on a day in the preview to fill that day with leave when you
@@ -67,7 +69,8 @@ sync; untick it to remove the leave the app logged.
 requests* and *Metadata* on the repositories you work in (authorised for SSO if your organisation enforces
 it). Leave the API URL empty for github.com, or use your GitHub Enterprise Server's `https://host/api/v3`.
 To use the mock, enter any token and `http://localhost:3001`. Optionally limit the search to some
-organisations. Without a token, only Jira's automatic worklogs are used.
+organisations. GitHub is only read when you press the button; without a token, only Jira's automatic
+worklogs are used.
 
 ## Test / build
 
@@ -78,11 +81,11 @@ npm run build
 
 ## Architecture
 
-- `TimesheetEngineService`: pure function from settings, existing worklogs and evidence to an execution
-  plan (creations, deletions, and the worklogs to remember before deleting). In allocation mode, recurring
-  events win over clashing worklogs, leave wins over both, and allocations fill the rest. Activity mode is
-  in `activity-distribution.ts` and leave, used by both, in `leave-planner.ts`. Either way, a second sync
-  changes nothing.
+- `TimesheetEngineService`: pure function from settings and existing worklogs to an execution plan
+  (creations, deletions, and the worklogs to remember before deleting). Recurring events win over clashing
+  worklogs, leave (`leave-planner.ts`) wins over both, and allocations fill the rest. A week with its own
+  allocations replaces the automatic worklogs instead. Either way, a second sync changes nothing.
+- `activity-allocations.ts`: pure functions from a week's evidence to its allocations.
 - `SettingsService` / `JiraIntegrationService`: `localStorage` persistence and the `jira.js` client, routed
   through the dev-server relay in the running app. Every worklog the app creates carries a
   `jira-timesheets` worklog property, so it can tell its own worklogs from ones logged by hand or added

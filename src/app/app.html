@@ -23,6 +23,9 @@
   @case ('loading') {
     <p class="status" data-testid="status">Loading worklogs…</p>
   }
+  @case ('filling') {
+    <p class="status" data-testid="status">Reading your activity…</p>
+  }
   @case ('syncing') {
     <p class="status" data-testid="status">Syncing…</p>
   }
@@ -47,14 +50,16 @@
       [lockedLeaveDays]="leaveState().locked"
       (leaveToggled)="toggleLeave($event)"
     />
-    @if (settings().activityMode) {
-      <app-activity-panel
-        [issues]="activityIssues()"
-        [unkeyedPullRequests]="unkeyedPullRequests()"
-        [placeholderIssueKey]="settings().placeholderIssueKey"
-        [warnings]="activityWarnings()"
-      />
-    }
+    <app-activity-panel
+      [weekAllocations]="weekAllocations()"
+      [issues]="activityIssues()"
+      [unkeyedPullRequests]="unkeyedPullRequests()"
+      [placeholderIssueKey]="settings().placeholderIssueKey"
+      [warnings]="activityWarnings()"
+      [busy]="busy()"
+      (fill)="fillFromActivity()"
+      (clear)="clearWeekAllocations()"
+    />
   </section>
   <aside class="sidebar">
     <app-settings-panel

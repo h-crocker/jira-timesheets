@@ -17,7 +17,7 @@ function settings(overrides: Partial<UserSettings> = {}): UserSettings {
     workDays: [1, 2, 3, 4, 5],
     allocations: [],
     schedules: [],
-    activityMode: false,
+    weekAllocations: {},
     leaveIssueKey: 'HR-1',
     placeholderIssueKey: '',
     githubOrgs: [],

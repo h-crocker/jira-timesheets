@@ -131,3 +131,9 @@ export function matchRecorded(
   });
   return { recorded, unrecorded };
 }
+
+/** A week's key in settings and Jira properties: its Monday as a local yyyy-mm-dd date. */
+export function weekKey(weekStart: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${weekStart.getFullYear()}-${pad(weekStart.getMonth() + 1)}-${pad(weekStart.getDate())}`;
+}

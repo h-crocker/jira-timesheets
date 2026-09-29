@@ -2,6 +2,14 @@
 
 ## Status
 
+**Superseded in part.** After trying it, the per-day activity mode was replaced by a button, **Fill
+allocations from activity**, that turns the week's evidence into percentage allocations for that week
+only (`settings.weekAllocations`). A week with its own allocations replaces Jira's automatic worklogs when
+it syncs, as below; the allocation fill then spreads the time across the week. The evidence, weights, key
+finding, leave, placeholder, ownership marker and saved copies are as described here. §6 (sharing each day
+in blocks) and "never fill the future" no longer apply, and GitHub is only read when the button is pressed.
+
+
 All six phases are implemented. Where the code differs from the plan below:
 
 - The organisation filter is `githubOrgs`.
