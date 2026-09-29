@@ -49,10 +49,73 @@ export function worklogInterval(worklog: JiraWorklog): Interval {
   };
 }
 
-/** The working hours of one weekday of the week starting `weekStart`. */
+/**
+ * The lunch break of one weekday of the week starting `weekStart`: `lunchMinutes` after half the
+ * day's working hours, rounded to a 15-minute block. Null when there is no lunch break.
+ */
+export function lunchBreak(
+  weekStart: Date,
+  weekday: number,
+  settings: UserSettings,
+): Interval | null {
+  if (settings.lunchMinutes <= 0 || settings.hoursPerDay <= 0) {
+    return null;
+  }
+  const dayStart = timeOnDay(addDays(weekStart, weekday - 1), settings.startTime);
+  const morningSeconds =
+    Math.round((settings.hoursPerDay * 3600) / 2 / BLOCK_SECONDS) * BLOCK_SECONDS;
+  const start = new Date(dayStart.getTime() + morningSeconds * 1000);
+  return { start, end: new Date(start.getTime() + settings.lunchMinutes * 60000) };
+}
+
+/** One weekday's working day, from its start time to its end, lunch included. */
 export function daySlot(weekStart: Date, weekday: number, settings: UserSettings): Interval {
   const start = timeOnDay(addDays(weekStart, weekday - 1), settings.startTime);
-  return { start, end: new Date(start.getTime() + settings.hoursPerDay * 3600 * 1000) };
+  const lunch = lunchBreak(weekStart, weekday, settings);
+  const seconds = settings.hoursPerDay * 3600 + (lunch === null ? 0 : durationSeconds(lunch));
+  return { start, end: new Date(start.getTime() + seconds * 1000) };
+}
+
+/** One weekday's working hours: its working day either side of the lunch break. */
+export function workIntervals(
+  weekStart: Date,
+  weekday: number,
+  settings: UserSettings,
+): Interval[] {
+  const lunch = lunchBreak(weekStart, weekday, settings);
+  return freeGaps(daySlot(weekStart, weekday, settings), lunch === null ? [] : [lunch]);
+}
+
+/**
+ * One weekday's free working time: the parts of its working hours that none of `occupied`
+ * covers, from the start of the day, adding up to no more than the day's hours less everything
+ * in `occupied` that starts that day. Time logged over lunch or outside working hours still
+ * counts toward the day, so the day never adds up to more than its hours.
+ */
+export function freeWorkTime(
+  weekStart: Date,
+  weekday: number,
+  settings: UserSettings,
+  occupied: Interval[],
+): Interval[] {
+  const day = addDays(weekStart, weekday - 1);
+  let left =
+    settings.hoursPerDay * 3600 -
+    occupied
+      .filter((interval) => startOfDay(interval.start).getTime() === startOfDay(day).getTime())
+      .reduce((sum, interval) => sum + durationSeconds(interval), 0);
+  const free: Interval[] = [];
+  for (const interval of workIntervals(weekStart, weekday, settings)) {
+    for (const gap of freeGaps(interval, occupied)) {
+      if (left <= 0) {
+        return free;
+      }
+      const seconds = Math.min(durationSeconds(gap), left);
+      free.push({ start: gap.start, end: new Date(gap.start.getTime() + seconds * 1000) });
+      left -= seconds;
+    }
+  }
+  return free;
 }
 
 /** The parts of `slot` that none of `occupied` covers, in order. */

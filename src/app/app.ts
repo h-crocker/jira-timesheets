@@ -17,12 +17,12 @@ import type {
   JiraWorklog,
   PercentageAllocation,
   RecurringSchedule,
-  UserSettings,
 } from './models/domain';
 import { CalendarGridComponent } from './components/calendar-grid/calendar-grid';
 import {
   type ActivitySettingsChange,
   SettingsPanelComponent,
+  type WorkHoursChange,
 } from './components/settings-panel/settings-panel';
 import { WeekSelectorComponent } from './components/week-selector/week-selector';
 import {
@@ -248,9 +248,7 @@ export class App {
     this.currentWeek.set(startOfWeek(week));
   }
 
-  protected onWorkHoursChanged(
-    change: Pick<UserSettings, 'startTime' | 'hoursPerDay' | 'workDays'>,
-  ): void {
+  protected onWorkHoursChanged(change: WorkHoursChange): void {
     this.settingsService.updateSettings(change);
   }
 
@@ -265,6 +263,19 @@ export class App {
       this.settingsService.addAllocation(allocation);
     } else {
       this.settingsService.setWeekAllocations(weekKey(this.currentWeek()), [...own, allocation]);
+    }
+  }
+
+  /** Edits an allocation on show in place: in the week's own, if it has them, else the usual ones. */
+  protected onAllocationChanged(allocation: PercentageAllocation): void {
+    const own = this.weekAllocations();
+    if (own === null) {
+      this.settingsService.updateAllocation(allocation);
+    } else {
+      this.settingsService.setWeekAllocations(
+        weekKey(this.currentWeek()),
+        own.map((item) => (item.id === allocation.id ? allocation : item)),
+      );
     }
   }
 

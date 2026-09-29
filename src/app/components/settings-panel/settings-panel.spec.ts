@@ -5,6 +5,7 @@ import { SettingsPanelComponent } from './settings-panel';
 const SETTINGS: UserSettings = {
   startTime: '09:00',
   hoursPerDay: 7.5,
+  lunchMinutes: 60,
   workDays: [1, 2, 3, 4, 5],
   allocations: [{ id: 'a1', issueKey: 'GWP-2070', summary: 'Main work', percentage: 75 }],
   schedules: [
@@ -38,9 +39,10 @@ describe('SettingsPanelComponent', () => {
     const fixture = create();
     expect(q<HTMLInputElement>(fixture, 'start-time').value).toBe('09:00');
     expect(q<HTMLInputElement>(fixture, 'hours-per-day').value).toBe('7.5');
+    expect(q<HTMLInputElement>(fixture, 'lunch-minutes').value).toBe('60');
     expect(q<HTMLInputElement>(fixture, 'workday-3').checked).toBe(true);
     expect(q(fixture, 'allocation-a1').textContent).toContain('GWP-2070');
-    expect(q(fixture, 'allocation-a1').textContent).toContain('75%');
+    expect(q<HTMLInputElement>(fixture, 'allocation-percentage-a1').value).toBe('75');
     expect(q(fixture, 'schedule-s1').textContent).toContain('Mon, Wed');
   });
 
@@ -58,10 +60,13 @@ describe('SettingsPanelComponent', () => {
 
     type(q<HTMLInputElement>(fixture, 'start-time'), '08:30');
     type(q<HTMLInputElement>(fixture, 'hours-per-day'), '8');
+    type(q<HTMLInputElement>(fixture, 'lunch-minutes'), '30');
     q<HTMLInputElement>(fixture, 'workday-5').click();
     q(fixture, 'save-work-hours').click();
 
-    expect(emitted).toEqual([{ startTime: '08:30', hoursPerDay: 8, workDays: [1, 2, 3, 4] }]);
+    expect(emitted).toEqual([
+      { startTime: '08:30', hoursPerDay: 8, lunchMinutes: 30, workDays: [1, 2, 3, 4] },
+    ]);
   });
 
   it('emits allocationRemoved and scheduleRemoved with ids', () => {
@@ -76,6 +81,28 @@ describe('SettingsPanelComponent', () => {
 
     expect(allocations).toEqual(['a1']);
     expect(schedules).toEqual(['s1']);
+  });
+
+  it("edits an allocation's percentage in place", () => {
+    const fixture = create();
+    const emitted: unknown[] = [];
+    fixture.componentInstance.allocationChanged.subscribe((v) => emitted.push(v));
+    const field = q<HTMLInputElement>(fixture, 'allocation-percentage-a1');
+    const change = (value: string) => {
+      field.value = value;
+      field.dispatchEvent(new Event('change'));
+    };
+
+    change('40');
+    expect(emitted).toEqual([{ id: 'a1', issueKey: 'GWP-2070', summary: 'Main work', percentage: 40 }]);
+
+    // Blank, negative or unchanged: nothing is emitted, and a bad value is put back.
+    change('');
+    expect(field.value).toBe('75');
+    change('-5');
+    expect(field.value).toBe('75');
+    change('75');
+    expect(emitted).toHaveLength(1);
   });
 
   it('emits allocationAdded and resets the form', () => {
@@ -182,7 +209,7 @@ describe('SettingsPanelComponent', () => {
     expect(q(fixture, 'allocations-scope').textContent).toContain('For Sep 28 – Oct 4 only');
     expect(q(fixture, 'allocation-a1')).toBeNull();
     const row = q(fixture, 'allocation-activity-GWP-8');
-    expect(row.textContent).toContain('100%');
+    expect(q<HTMLInputElement>(fixture, 'allocation-percentage-activity-GWP-8').value).toBe('100');
     expect(row.querySelector('[data-testid="allocation-evidence"]')!.textContent).toBe(
       'acme/web#52 (2 actions)',
     );

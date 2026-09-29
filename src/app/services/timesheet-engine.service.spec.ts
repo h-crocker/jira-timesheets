@@ -22,6 +22,7 @@ function defaultSettings(overrides: Partial<UserSettings> = {}): UserSettings {
   return {
     startTime: '09:00',
     hoursPerDay: 7.5,
+    lunchMinutes: 60,
     workDays: [1, 2, 3, 4, 5],
     allocations: [],
     schedules: [],
@@ -76,6 +77,25 @@ function expectNoOverlaps(spans: Span[], label: string): void {
   for (let i = 1; i < sorted.length; i++) {
     expect(sorted[i].start, `${label}: span starting at ${new Date(sorted[i].start).toISOString()} overlaps the previous span`).toBeGreaterThanOrEqual(sorted[i - 1].end);
   }
+}
+
+/** Each weekday's lunch hour, 12:45–13:45 for 7.5 hours from 09:00. */
+function lunches(): Span[] {
+  return [0, 1, 2, 3, 4].map((day) => ({ start: at(day, 12, 45).getTime(), end: at(day, 13, 45).getTime() }));
+}
+
+function seconds(creations: WorklogCreation[], issueKey: string): number {
+  return creations
+    .filter((creation) => creation.issueKey === issueKey)
+    .reduce((sum, creation) => sum + creation.timeSpentSeconds, 0);
+}
+
+/** Whether the creation starts in the morning or the afternoon of day `day` (0 = Monday). */
+function inHalf(creation: WorklogCreation, day: number, half: 'morning' | 'afternoon'): boolean {
+  const start = new Date(creation.started);
+  return half === 'morning'
+    ? start >= at(day, 0) && start < at(day, 12, 45)
+    : start >= at(day, 13, 45) && start < at(day + 1, 0);
 }
 
 function expectNoOverlapWithOccupied(creations: WorklogCreation[], occupied: Span[], label: string): void {
@@ -186,7 +206,7 @@ describe('TimesheetEngineService', () => {
     ]);
   });
 
-  it('distributes a 75% allocation chronologically over the remaining capacity', () => {
+  it('spreads a 75% allocation over every morning and afternoon, around what is booked', () => {
     const settings = defaultSettings({
       schedules: [
         {
@@ -206,37 +226,84 @@ describe('TimesheetEngineService', () => {
 
     expect(plan.deletions).toEqual([]);
     const allocationCreations = plan.creations.filter((creation) => creation.issueKey === 'GWP-9');
-    const total = allocationCreations.reduce((sum, creation) => sum + creation.timeSpentSeconds, 0);
-    expect(total).toBeLessThanOrEqual(87750);
-    expect(total).toBe(87300);
-    expect(allocationCreations).toEqual([
-      { issueKey: 'GWP-9', started: at(0, 12).toISOString(), timeSpentSeconds: 16200, comment: 'Allocation', source: 'allocated' },
-      { issueKey: 'GWP-9', started: at(1, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
-      { issueKey: 'GWP-9', started: at(2, 11).toISOString(), timeSpentSeconds: 19800, comment: 'Allocation', source: 'allocated' },
-      { issueKey: 'GWP-9', started: at(3, 9).toISOString(), timeSpentSeconds: 24300, comment: 'Allocation', source: 'allocated' },
-    ]);
+    // 130 free blocks: 75% is 97.5, rounded down to 97.
+    expect(seconds(plan.creations, 'GWP-9')).toBe(87300);
+    expect(allocationCreations[0].started).toBe(at(0, 12).toISOString());
+    for (const day of [0, 1, 2, 3, 4]) {
+      for (const half of ['morning', 'afternoon'] as const) {
+        expect(allocationCreations.some((creation) => inHalf(creation, day, half)), `day ${day} ${half}`).toBe(true);
+      }
+    }
     expectNoOverlapWithOccupied(
       plan.creations,
-      [{ start: at(0, 9).getTime(), end: at(0, 12).getTime() }],
+      [{ start: at(0, 9).getTime(), end: at(0, 12).getTime() }, ...lunches()],
       '75% allocation',
     );
   });
 
-  it('continues an allocation on the next day when a day gap is exhausted', () => {
+  it('fills each working day either side of an hour for lunch in the middle', () => {
     const settings = defaultSettings({
       allocations: [{ id: 'a1', issueKey: 'GWP-9', summary: 'Allocation', percentage: 100 }],
     });
 
     const plan = engine.computePlan(input({ settings }));
 
-    expect(plan.creations).toEqual([
-      { issueKey: 'GWP-9', started: at(0, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
-      { issueKey: 'GWP-9', started: at(1, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
-      { issueKey: 'GWP-9', started: at(2, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
-      { issueKey: 'GWP-9', started: at(3, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
-      { issueKey: 'GWP-9', started: at(4, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
-    ]);
+    // 7.5 hours from 09:00, with lunch after the first half: 09:00–12:45 and 13:45–17:30.
+    expect(plan.creations).toEqual(
+      [0, 1, 2, 3, 4].flatMap((day) => [
+        { issueKey: 'GWP-9', started: at(day, 9).toISOString(), timeSpentSeconds: 13500, comment: 'Allocation', source: 'allocated' },
+        { issueKey: 'GWP-9', started: at(day, 13, 45).toISOString(), timeSpentSeconds: 13500, comment: 'Allocation', source: 'allocated' },
+      ]),
+    );
     expectNoOverlaps(toSpans(plan.creations), '100% allocation');
+  });
+
+  it('moves lunch with the working hours, and leaves it out when there is none', () => {
+    const allocations = [{ id: 'a1', issueKey: 'GWP-9', summary: 'Allocation', percentage: 100 }];
+    const times = (settings: UserSettings) =>
+      engine
+        .computePlan(input({ settings }))
+        .creations.map((creation) => [creation.started, creation.timeSpentSeconds]);
+
+    expect(
+      times(defaultSettings({ workDays: [1], startTime: '08:00', hoursPerDay: 8, lunchMinutes: 30, allocations })),
+    ).toEqual([
+      [at(0, 8).toISOString(), 4 * 3600],
+      [at(0, 12, 30).toISOString(), 4 * 3600],
+    ]);
+    expect(times(defaultSettings({ workDays: [1], lunchMinutes: 0, allocations }))).toEqual([
+      [at(0, 9).toISOString(), 27000],
+    ]);
+  });
+
+  it('counts a meeting over lunch toward its day, which still adds up to its hours', () => {
+    const settings = defaultSettings({
+      workDays: [1],
+      schedules: [
+        { id: 's1', issueKey: 'GWP-1', summary: 'Lunch and learn', weekdays: [1], startTime: '12:30', durationSeconds: 3600, enabled: true },
+      ],
+      allocations: [{ id: 'a1', issueKey: 'GWP-9', summary: 'Allocation', percentage: 100 }],
+    });
+
+    const plan = engine.computePlan(input({ settings }));
+
+    expect(plan.creations.map((creation) => [creation.issueKey, creation.started, creation.timeSpentSeconds])).toEqual([
+      ['GWP-9', at(0, 9).toISOString(), 3.5 * 3600],
+      ['GWP-1', at(0, 12, 30).toISOString(), 3600],
+      ['GWP-9', at(0, 13, 45).toISOString(), 3 * 3600],
+    ]);
+  });
+
+  it('fills nothing on a day taken up by time logged by hand, even where it runs past lunch', () => {
+    const settings = defaultSettings({
+      allocations: [{ id: 'a1', issueKey: 'GWP-9', summary: 'Allocation', percentage: 100 }],
+    });
+
+    // A day's worth from 09:00 ends at 16:30, an hour before the working day does.
+    const plan = engine.computePlan(input({ settings, worklogs: [worklog('w1', at(4, 9), 27000)] }));
+
+    expect(plan.creations.filter((creation) => new Date(creation.started) >= at(4, 0))).toEqual([]);
+    expect(seconds(plan.creations, 'GWP-9')).toBe(4 * 27000);
   });
 
   it('creates no allocations when the week is exactly fully booked', () => {
@@ -272,7 +339,7 @@ describe('TimesheetEngineService', () => {
     expect(plan.creations[0]).toEqual({
       issueKey: 'GWP-9',
       started: at(0, 12, 1, 30).toISOString(),
-      timeSpentSeconds: 15300,
+      timeSpentSeconds: 1800,
       comment: 'Allocation',
       source: 'allocated',
     });
@@ -288,7 +355,7 @@ describe('TimesheetEngineService', () => {
     );
   });
 
-  it('places multiple allocations sequentially without overlap', () => {
+  it('takes turns between the allocations every morning and afternoon', () => {
     const settings = defaultSettings({
       allocations: [
         { id: 'a1', issueKey: 'GWP-9', summary: 'First', percentage: 50 },
@@ -298,12 +365,53 @@ describe('TimesheetEngineService', () => {
 
     const plan = engine.computePlan(input({ settings }));
 
-    const first = plan.creations.filter((creation) => creation.issueKey === 'GWP-9');
-    const second = plan.creations.filter((creation) => creation.issueKey === 'GWP-10');
-    expect(first.map((creation) => creation.timeSpentSeconds)).toEqual([27000, 27000, 13500]);
-    expect(second.map((creation) => creation.timeSpentSeconds)).toEqual([13500, 27000]);
-    expect(second[0].started).toBe(at(2, 12, 45).toISOString());
+    // Each half day has its part of each allocation in turn, then its part of the 20% left over.
+    expect(plan.creations.slice(0, 4).map((creation) => [creation.issueKey, creation.started, creation.timeSpentSeconds])).toEqual([
+      ['GWP-9', at(0, 9).toISOString(), 7200],
+      ['GWP-10', at(0, 11).toISOString(), 3600],
+      ['GWP-9', at(0, 13, 45).toISOString(), 6300],
+      ['GWP-10', at(0, 15, 30).toISOString(), 4500],
+    ]);
+    expect([seconds(plan.creations, 'GWP-9'), seconds(plan.creations, 'GWP-10')]).toEqual([75 * 900, 45 * 900]);
+    for (const day of [0, 1, 2, 3, 4]) {
+      for (const half of ['morning', 'afternoon'] as const) {
+        const issues = plan.creations.filter((creation) => inHalf(creation, day, half)).map((creation) => creation.issueKey);
+        expect(issues, `day ${day} ${half}`).toEqual(['GWP-9', 'GWP-10']);
+      }
+    }
     expectNoOverlaps(toSpans(plan.creations), 'multiple allocations');
+  });
+
+  it('logs a 10% allocation 15 to 30 minutes at a time, alongside the others every half day', () => {
+    const settings = defaultSettings({
+      schedules: [
+        { id: 's1', issueKey: 'GWP-1', summary: 'Standup', weekdays: [1, 2, 3, 4, 5], startTime: '09:30', durationSeconds: 900, enabled: true },
+      ],
+      allocations: [
+        { id: 'a1', issueKey: 'GWP-7', summary: 'Main', percentage: 40 },
+        { id: 'a2', issueKey: 'GWP-8', summary: 'Second', percentage: 30 },
+        { id: 'a3', issueKey: 'GWP-9', summary: 'Third', percentage: 20 },
+        { id: 'a4', issueKey: 'GWP-10', summary: 'Small', percentage: 10 },
+      ],
+    });
+
+    const plan = engine.computePlan(input({ settings }));
+
+    const small = plan.creations.filter((creation) => creation.issueKey === 'GWP-10');
+    expect(small).toHaveLength(10);
+    expect(small.every((creation) => creation.timeSpentSeconds >= 900 && creation.timeSpentSeconds <= 1800)).toBe(true);
+    for (const day of [0, 1, 2, 3, 4]) {
+      for (const half of ['morning', 'afternoon'] as const) {
+        const issues = plan.creations
+          .filter((creation) => creation.source === 'allocated' && inHalf(creation, day, half))
+          .map((creation) => creation.issueKey);
+        expect(new Set(issues), `day ${day} ${half}`).toEqual(new Set(['GWP-7', 'GWP-8', 'GWP-9', 'GWP-10']));
+      }
+    }
+    // No allocation runs for more than half of a morning or afternoon.
+    const longest = Math.max(...plan.creations.map((creation) => creation.timeSpentSeconds));
+    expect(longest).toBeLessThanOrEqual(1.5 * 3600);
+    expectNoOverlapWithOccupied(plan.creations, lunches(), 'four allocations');
   });
 
   it('ignores worklogs outside the target week', () => {
@@ -451,7 +559,7 @@ describe('TimesheetEngineService', () => {
         .reduce((sum, creation) => sum + creation.timeSpentSeconds, 0) / 900;
     expect([blocks('GWP-7'), blocks('GWP-8'), blocks('GWP-9')]).toEqual([40, 72, 33]);
     const last = plan.creations[plan.creations.length - 1];
-    expect(new Date(new Date(last.started).getTime() + last.timeSpentSeconds * 1000)).toEqual(at(4, 16, 30));
+    expect(new Date(new Date(last.started).getTime() + last.timeSpentSeconds * 1000)).toEqual(at(4, 17, 30));
     expectNoOverlaps(toSpans(plan.creations), 'leftover blocks');
   });
 
@@ -467,22 +575,26 @@ describe('TimesheetEngineService', () => {
     const plan = engine.computePlan(input({ settings }));
 
     // 30 blocks: 13.5 and 13.5 round down to 13 each; 90% of 30 is 27, so one block is left over.
-    expect(plan.creations.map((creation) => [creation.issueKey, creation.timeSpentSeconds / 900])).toEqual([
-      ['GWP-7', 14],
-      ['GWP-8', 13],
-    ]);
+    expect([seconds(plan.creations, 'GWP-7') / 900, seconds(plan.creations, 'GWP-8') / 900]).toEqual([14, 13]);
+    // The other three blocks are left empty at the ends of the morning and the afternoon.
+    const ends = plan.creations.map((creation) => new Date(creation.started).getTime() + creation.timeSpentSeconds * 1000);
+    expect(ends.some((end) => end === at(0, 12, 45).getTime() || end === at(0, 17, 30).getTime())).toBe(false);
   });
 
-  it('places an allocation that fits one day as a single chunk', () => {
+  it('spreads a 10% allocation on its own through the week rather than logging it in one go', () => {
     const settings = defaultSettings({
       allocations: [{ id: 'a1', issueKey: 'GWP-9', summary: 'Allocation', percentage: 10 }],
     });
 
     const plan = engine.computePlan(input({ settings }));
 
-    expect(plan.creations).toEqual([
-      { issueKey: 'GWP-9', started: at(0, 9).toISOString(), timeSpentSeconds: 13500, comment: 'Allocation', source: 'allocated' },
-    ]);
+    // 15 blocks a week: 30 minutes each morning and 15 each afternoon.
+    expect(plan.creations).toEqual(
+      [0, 1, 2, 3, 4].flatMap((day) => [
+        { issueKey: 'GWP-9', started: at(day, 9).toISOString(), timeSpentSeconds: 1800, comment: 'Allocation', source: 'allocated' },
+        { issueKey: 'GWP-9', started: at(day, 13, 45).toISOString(), timeSpentSeconds: 900, comment: 'Allocation', source: 'allocated' },
+      ]),
+    );
   });
 
   it('shares the week in proportion when the allocations add up to more than 100%', () => {
@@ -496,10 +608,12 @@ describe('TimesheetEngineService', () => {
 
     const plan = engine.computePlan(input({ settings }));
 
-    // 30 blocks shared 100:50, so the allocation added last still gets its third.
+    // 30 blocks shared 100:50, so the allocation added last still gets its third of each half day.
     expect(plan.creations.map((creation) => [creation.issueKey, creation.timeSpentSeconds / 900])).toEqual([
-      ['GWP-7', 20],
-      ['GWP-8', 10],
+      ['GWP-7', 10],
+      ['GWP-8', 5],
+      ['GWP-7', 10],
+      ['GWP-8', 5],
     ]);
   });
 
@@ -519,8 +633,9 @@ describe('TimesheetEngineService', () => {
     });
     const replan = engine.computePlan(input({ settings: changed, worklogs: synced }));
 
-    // Monday and Tuesday are still GWP-9's; Wednesday is split, and Thursday and Friday move to GWP-10.
-    expect(replan.deletions.map((deletion) => deletion.reason)).toEqual(Array(3).fill('stale-generated'));
+    // GWP-10 now takes its part of every morning and afternoon, so GWP-9's worklogs are re-planned.
+    expect(replan.deletions.length).toBeGreaterThan(0);
+    expect(new Set(replan.deletions.map((deletion) => deletion.reason))).toEqual(new Set(['stale-generated']));
     expect(replan.absorb).toEqual([]);
     const after = applied(synced, replan);
     const total = (issueKey: string) =>
@@ -597,7 +712,8 @@ describe('TimesheetEngineService', () => {
       const logged = plan.creations.reduce((sum, creation) => sum + creation.timeSpentSeconds, 0);
       // Every working minute but Friday morning's leave: four standups, the rest allocated.
       expect(logged).toBe(4 * (27000 - 900) + 13500 + 4 * 900);
-      expect(plan.creations.at(-1)).toMatchObject({ started: at(4, 12, 45).toISOString(), timeSpentSeconds: 13500 });
+      const last = plan.creations.at(-1)!;
+      expect(new Date(last.started).getTime() + last.timeSpentSeconds * 1000).toBe(at(4, 17, 30).getTime());
     });
 
     it('plans nothing once synced, and re-plans only its own worklogs when the allocations change', () => {

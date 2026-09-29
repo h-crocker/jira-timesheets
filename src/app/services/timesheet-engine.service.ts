@@ -13,14 +13,14 @@ import {
   BLOCK_SECONDS,
   type Interval,
   addDays,
-  daySlot,
   durationSeconds,
-  freeGaps,
+  freeWorkTime,
   matchRecorded,
   overlaps,
   recurringEvents,
   sameMinute,
   weekKey,
+  workIntervals,
 } from './schedule-time';
 
 function toEvent(worklog: JiraWorklog): CalendarEvent {
@@ -36,33 +36,50 @@ function toEvent(worklog: JiraWorklog): CalendarEvent {
   };
 }
 
-/** The week's free time in working hours, in order, each gap with the whole blocks it holds. */
-function freeWeekGaps(
-  input: EngineInput,
-  occupied: Interval[],
-): Array<{ gap: Interval; blocks: number }> {
-  return input.settings.workDays
-    .map((weekday) => daySlot(input.weekStart, weekday, input.settings))
-    .sort((a, b) => a.start.getTime() - b.start.getTime())
-    .flatMap((slot) => freeGaps(slot, occupied))
-    .map((gap) => ({ gap, blocks: Math.floor(durationSeconds(gap) / BLOCK_SECONDS) }))
-    .filter(({ blocks }) => blocks > 0);
+interface FreeGap {
+  gap: Interval;
+  blocks: number;
 }
 
 /**
- * Shares `remaining` seconds of free time between the allocations in 15-minute blocks, in order
- * from the start of the week. Each allocation's share is rounded down to whole blocks and the
- * blocks that rounding leaves over go to the largest allocation, so allocations adding up to 100%
- * fill every free block. Allocations adding up to more than 100% share the week in proportion, so
- * every one of them gets its part.
+ * The week's free working time as sessions: each morning and afternoon in order, with its free
+ * gaps and the whole blocks each holds.
+ */
+function freeSessions(input: EngineInput, occupied: Interval[]): FreeGap[][] {
+  const { weekStart, settings } = input;
+  return [...new Set(settings.workDays)]
+    .sort((a, b) => a - b)
+    .flatMap((weekday) => {
+      const free = freeWorkTime(weekStart, weekday, settings, occupied);
+      return workIntervals(weekStart, weekday, settings).map((interval) =>
+        free
+          .filter((gap) => gap.start >= interval.start && gap.end <= interval.end)
+          .map((gap) => ({ gap, blocks: Math.floor(durationSeconds(gap) / BLOCK_SECONDS) }))
+          .filter(({ blocks }) => blocks > 0),
+      );
+    })
+    .filter((session) => session.length > 0);
+}
+
+/**
+ * Shares `remaining` seconds of free time between the allocations in 15-minute blocks. Each
+ * allocation's share is rounded down to whole blocks and the blocks that rounding leaves over go
+ * to the largest allocation, so allocations adding up to 100% fill every free block. Allocations
+ * adding up to more than 100% share the week in proportion, so every one of them gets its part.
+ *
+ * Every morning and afternoon gets its part of each allocation's share, one after the other in
+ * the order of the allocations, so a 10% allocation is logged 15 to 30 minutes at a time all
+ * through the week rather than in one go. Time left unallocated is spread the same way, at the
+ * end of each morning and afternoon.
  */
 function fillAllocations(
   allocations: PercentageAllocation[],
-  gaps: Array<{ gap: Interval; blocks: number }>,
+  sessions: FreeGap[][],
   remaining: number,
 ): WorklogCreation[] {
+  const room = (session: FreeGap[]) => session.reduce((sum, { blocks }) => sum + blocks, 0);
   const available = Math.min(
-    gaps.reduce((sum, { blocks }) => sum + blocks, 0),
+    sessions.reduce((sum, session) => sum + room(session), 0),
     Math.floor(remaining / BLOCK_SECONDS),
   );
   const whole = Math.max(
@@ -84,29 +101,56 @@ function fillAllocations(
     blocks[largest] += Math.max(0, total - blocks.reduce((sum, count) => sum + count, 0));
   }
 
+  // The week's blocks in the order Webster's method hands them out: the next goes to the share
+  // with the most blocks per (2 × blocks given so far + 1), ties in allocation order. Any stretch
+  // of this order holds close to each share's part of it, so cutting it into sessions spreads
+  // every share evenly through the week. Unallocated time is the last share.
+  const shares = [...blocks, available - total];
+  const order = shares
+    .flatMap((count, owner) =>
+      Array.from({ length: Math.max(0, count) }, (_, given) => ({ owner, given })),
+    )
+    .sort(
+      (a, b) =>
+        (2 * a.given + 1) * shares[b.owner] - (2 * b.given + 1) * shares[a.owner] ||
+        a.owner - b.owner,
+    );
+
   const creations: WorklogCreation[] = [];
-  let gapIndex = 0;
-  let used = 0;
-  allocations.forEach((allocation, index) => {
-    let left = blocks[index];
-    while (left > 0 && gapIndex < gaps.length) {
-      const { gap, blocks: room } = gaps[gapIndex];
-      const take = Math.min(left, room - used);
-      creations.push({
-        issueKey: allocation.issueKey,
-        started: new Date(gap.start.getTime() + used * BLOCK_SECONDS * 1000).toISOString(),
-        timeSpentSeconds: take * BLOCK_SECONDS,
-        comment: allocation.summary,
-        source: 'allocated',
-      });
-      left -= take;
-      used += take;
-      if (used === room) {
-        gapIndex++;
-        used = 0;
-      }
+  let next = 0;
+  for (const session of sessions) {
+    const counts = shares.map(() => 0);
+    for (const { owner } of order.slice(next, next + room(session))) {
+      counts[owner]++;
     }
-  });
+    next += room(session);
+
+    let gapIndex = 0;
+    let used = 0;
+    counts.forEach((count, owner) => {
+      let left = count;
+      while (left > 0 && gapIndex < session.length) {
+        const { gap, blocks: gapBlocks } = session[gapIndex];
+        const take = Math.min(left, gapBlocks - used);
+        const allocation = allocations[owner];
+        if (allocation !== undefined) {
+          creations.push({
+            issueKey: allocation.issueKey,
+            started: new Date(gap.start.getTime() + used * BLOCK_SECONDS * 1000).toISOString(),
+            timeSpentSeconds: take * BLOCK_SECONDS,
+            comment: allocation.summary,
+            source: 'allocated',
+          });
+        }
+        left -= take;
+        used += take;
+        if (used === gapBlocks) {
+          gapIndex++;
+          used = 0;
+        }
+      }
+    });
+  }
   return creations;
 }
 
@@ -196,7 +240,7 @@ export class TimesheetEngineService {
     const remaining = totalWeekCapacitySeconds - occupiedSeconds;
 
     const allocated =
-      remaining > 0 ? fillAllocations(allocations, freeWeekGaps(input, occupied), remaining) : [];
+      remaining > 0 ? fillAllocations(allocations, freeSessions(input, occupied), remaining) : [];
 
     // The app's own worklogs that match the fill stay; the rest go.
     const kept = new Set<string>();

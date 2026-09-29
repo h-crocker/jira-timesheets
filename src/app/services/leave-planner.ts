@@ -3,7 +3,7 @@ import {
   type Interval,
   daySlot,
   durationSeconds,
-  freeGaps,
+  freeWorkTime,
   isoWeekday,
   overlaps,
   sameMinute,
@@ -28,7 +28,7 @@ export interface LeavePlan {
 export interface LeaveDayState {
   /** Weekdays the app has logged leave on. */
   ticked: number[];
-  /** Weekdays whose working hours are all covered by leave logged by hand. */
+  /** Weekdays whose working hours are all taken up by leave logged by hand. */
   locked: number[];
 }
 
@@ -39,7 +39,7 @@ function leaveWorklogs(settings: UserSettings, worklogs: JiraWorklog[]): JiraWor
 
 function lockedDays(weekStart: Date, settings: UserSettings, handLogged: Interval[]): number[] {
   return settings.workDays
-    .filter((weekday) => freeGaps(daySlot(weekStart, weekday, settings), handLogged).length === 0)
+    .filter((weekday) => freeWorkTime(weekStart, weekday, settings, handLogged).length === 0)
     .sort((a, b) => a - b);
 }
 
@@ -65,8 +65,9 @@ export function leaveDayState(
 }
 
 /**
- * Leave for the week: every day in `leaveDays` is filled with leave around any leave logged by
- * hand, and leave the app logged on other days is removed. Leave logged by hand always stays.
+ * Leave for the week: the working hours of every day in `leaveDays`, either side of lunch, are
+ * filled with leave around any leave logged by hand, and leave the app logged on other days is
+ * removed. Leave logged by hand always stays.
  */
 export function planLeave(
   weekStart: Date,
@@ -84,7 +85,7 @@ export function planLeave(
         continue;
       }
       offDays.add(weekday);
-      for (const gap of freeGaps(daySlot(weekStart, weekday, settings), handLogged)) {
+      for (const gap of freeWorkTime(weekStart, weekday, settings, handLogged)) {
         const minutes = Math.floor(durationSeconds(gap) / 60);
         if (minutes > 0) {
           wanted.push({ start: gap.start, end: new Date(gap.start.getTime() + minutes * 60000) });

@@ -10,6 +10,11 @@ import type {
 const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 const DEFAULT_GITHUB_API_URL = 'https://api.github.com';
 
+export type WorkHoursChange = Pick<
+  UserSettings,
+  'startTime' | 'hoursPerDay' | 'lunchMinutes' | 'workDays'
+>;
+
 export type ActivitySettingsChange = Pick<
   UserSettings,
   'leaveIssueKey' | 'placeholderIssueKey' | 'githubOrgs'
@@ -33,8 +38,10 @@ export class SettingsPanelComponent {
   /** Disables filling while the app is busy. */
   busy = input(false);
 
-  workHoursChanged = output<{ startTime: string; hoursPerDay: number; workDays: number[] }>();
+  workHoursChanged = output<WorkHoursChange>();
   allocationAdded = output<PercentageAllocation>();
+  /** An allocation edited in place, with the same id. */
+  allocationChanged = output<PercentageAllocation>();
   allocationRemoved = output<string>();
   fillFromActivity = output<void>();
   useUsualAllocations = output<void>();
@@ -48,6 +55,7 @@ export class SettingsPanelComponent {
 
   protected readonly startTime = signal<string | null>(null);
   protected readonly hoursPerDay = signal<number | null>(null);
+  protected readonly lunchMinutes = signal<number | null>(null);
   protected readonly workDays = signal<number[] | null>(null);
 
   protected readonly allocIssueKey = signal('');
@@ -93,6 +101,10 @@ export class SettingsPanelComponent {
     return this.hoursPerDay() ?? this.settings().hoursPerDay;
   }
 
+  protected effectiveLunchMinutes(): number {
+    return this.lunchMinutes() ?? this.settings().lunchMinutes;
+  }
+
   protected workDayChecked(day: number): boolean {
     return (this.workDays() ?? this.settings().workDays).includes(day);
   }
@@ -110,6 +122,11 @@ export class SettingsPanelComponent {
     this.hoursPerDay.set(Number.isFinite(value) ? value : 0);
   }
 
+  protected onLunchMinutesInput(event: Event): void {
+    const value = Number((event.target as HTMLInputElement).value);
+    this.lunchMinutes.set(Number.isFinite(value) && value > 0 ? value : 0);
+  }
+
   protected toggleWorkDay(day: number): void {
     const current = this.workDays() ?? this.settings().workDays;
     const next = current.includes(day)
@@ -122,6 +139,7 @@ export class SettingsPanelComponent {
     this.workHoursChanged.emit({
       startTime: this.effectiveStartTime(),
       hoursPerDay: this.effectiveHoursPerDay(),
+      lunchMinutes: this.effectiveLunchMinutes(),
       workDays: this.workDays() ?? this.settings().workDays,
     });
   }
@@ -150,6 +168,19 @@ export class SettingsPanelComponent {
     this.allocIssueKey.set('');
     this.allocSummary.set('');
     this.allocPercentage.set(0);
+  }
+
+  /** Emits the allocation with its new percentage; a blank or negative one puts the old one back. */
+  protected changeAllocationPercentage(allocation: PercentageAllocation, event: Event): void {
+    const field = event.target as HTMLInputElement;
+    const percentage = Number(field.value);
+    if (field.value.trim() === '' || !Number.isFinite(percentage) || percentage < 0) {
+      field.value = String(allocation.percentage);
+      return;
+    }
+    if (percentage !== allocation.percentage) {
+      this.allocationChanged.emit({ ...allocation, percentage });
+    }
   }
 
   protected removeAllocation(id: string): void {

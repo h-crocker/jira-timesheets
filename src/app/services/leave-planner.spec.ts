@@ -4,6 +4,8 @@ import { TimesheetEngineService } from './timesheet-engine.service';
 
 const HOUR = 3600;
 const FULL_DAY = 7.5 * HOUR;
+/** Half the working day, either side of lunch: 09:00–12:45 and 13:45–17:30. */
+const HALF_DAY = FULL_DAY / 2;
 const MONDAY = new Date(2026, 8, 28);
 
 function at(dayOffset: number, hours: number, minutes = 0): Date {
@@ -14,6 +16,7 @@ function settings(overrides: Partial<UserSettings> = {}): UserSettings {
   return {
     startTime: '09:00',
     hoursPerDay: 7.5,
+    lunchMinutes: 60,
     workDays: [1, 2, 3, 4, 5],
     allocations: [],
     schedules: [],
@@ -36,9 +39,10 @@ function worklog(
 }
 
 describe('leaveDayState', () => {
-  it('ticks days the app logged leave on and locks days covered by leave logged by hand', () => {
+  it('ticks days the app logged leave on and locks days taken up by leave logged by hand', () => {
     const state = leaveDayState(MONDAY, settings(), [
       worklog('ours', 'HR-1', at(1, 9), FULL_DAY, true),
+      // Ends at 16:30, an hour before the working day does, but it is a whole day's leave.
       worklog('hand', 'HR-1', at(3, 9), FULL_DAY),
       worklog('half', 'HR-1', at(4, 9), 3 * HOUR),
       worklog('other', 'GWP-1', at(2, 9), FULL_DAY, true),
@@ -83,7 +87,14 @@ describe('TimesheetEngineService leave in allocation mode', () => {
       {
         issueKey: 'HR-1',
         started: at(0, 9).toISOString(),
-        timeSpentSeconds: FULL_DAY,
+        timeSpentSeconds: HALF_DAY,
+        comment: 'Leave',
+        source: 'leave',
+      },
+      {
+        issueKey: 'HR-1',
+        started: at(0, 13, 45).toISOString(),
+        timeSpentSeconds: HALF_DAY,
         comment: 'Leave',
         source: 'leave',
       },
@@ -123,10 +134,28 @@ describe('TimesheetEngineService leave in allocation mode', () => {
     const plan = engine.computePlan({
       weekStart: MONDAY,
       settings: settings(),
-      worklogs: [worklog('ours', 'HR-1', at(2, 9), FULL_DAY, true)],
+      worklogs: [
+        worklog('morning', 'HR-1', at(2, 9), HALF_DAY, true),
+        worklog('afternoon', 'HR-1', at(2, 13, 45), HALF_DAY, true),
+      ],
       leaveDays: [3],
     });
     expect(plan).toEqual({ deletions: [], creations: [], absorb: [] });
+  });
+
+  it('fills the rest of a day with leave around half a day logged by hand', () => {
+    const plan = engine.computePlan({
+      weekStart: MONDAY,
+      settings: settings(),
+      worklogs: [worklog('hand', 'HR-1', at(2, 9), 3 * HOUR)],
+      leaveDays: [3],
+    });
+    expect(plan.creations.map((creation) => [creation.started, creation.timeSpentSeconds])).toEqual(
+      [
+        [at(2, 12).toISOString(), 0.75 * HOUR],
+        [at(2, 13, 45).toISOString(), HALF_DAY],
+      ],
+    );
   });
 
   it('ignores marked days without a leave ticket', () => {
