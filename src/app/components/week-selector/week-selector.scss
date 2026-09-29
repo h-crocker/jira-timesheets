@@ -1,0 +1,25 @@
+.week-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.nav-button {
+  border: 1px solid var(--border-color, #d0d0d0);
+  background: transparent;
+  border-radius: 0.25rem;
+  font-size: 1.125rem;
+  line-height: 1;
+  padding: 0.25rem 0.625rem;
+  cursor: pointer;
+}
+
+.nav-button:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.week-label {
+  font-weight: 600;
+  min-width: 12rem;
+  text-align: center;
+}

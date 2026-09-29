@@ -1,0 +1,24 @@
+<div class="calendar-grid" data-testid="calendar-grid">
+  @for (column of dayColumns(); track column.day.getTime()) {
+    <div class="day-column" [attr.data-date]="dateKey(column.day)">
+      <header class="day-header">
+        <span class="weekday" data-testid="weekday">{{ weekdayName(column.day) }}</span>
+        <span class="date" data-testid="date-label">{{ dateLabel(column.day) }}</span>
+      </header>
+      @if (column.events.length === 0) {
+        <div class="empty" data-testid="empty-state">No entries</div>
+      } @else {
+        <div class="events">
+          @for (event of column.events; track event.id) {
+            <div class="event-row" [attr.data-testid]="'event-' + event.id">
+              <span class="time-range">{{ timeRange(event) }}</span>
+              <span class="issue-key">{{ event.issueKey }}</span>
+              <span class="summary">{{ event.summary }}</span>
+              <span class="source-badge" [attr.data-source]="event.source">{{ event.source }}</span>
+            </div>
+          }
+        </div>
+      }
+    </div>
+  }
+</div>

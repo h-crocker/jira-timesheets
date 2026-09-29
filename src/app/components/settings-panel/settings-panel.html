@@ -1,0 +1,192 @@
+<div class="settings-panel">
+  <section class="section">
+    <h2>Work hours</h2>
+    <div class="field-row">
+      <label class="field">
+        <span>Start time</span>
+        <input
+          type="time"
+          data-testid="start-time"
+          [value]="effectiveStartTime()"
+          (input)="onStartTimeInput($event)"
+        />
+      </label>
+      <label class="field">
+        <span>Hours per day</span>
+        <input
+          type="number"
+          step="0.25"
+          min="0"
+          data-testid="hours-per-day"
+          [value]="effectiveHoursPerDay()"
+          (input)="onHoursPerDayInput($event)"
+        />
+      </label>
+    </div>
+    <fieldset class="work-days">
+      <legend>Work days</legend>
+      @for (day of [1, 2, 3, 4, 5]; track day) {
+        <label class="work-day">
+          <input
+            type="checkbox"
+            [checked]="workDayChecked(day)"
+            (change)="toggleWorkDay(day)"
+            [attr.data-testid]="'workday-' + day"
+          />
+          {{ weekdayNames[day - 1] }}
+        </label>
+      }
+    </fieldset>
+    <button type="button" class="save-button" data-testid="save-work-hours" (click)="saveWorkHours()">
+      Save
+    </button>
+  </section>
+
+  <section class="section">
+    <h2>Allocations</h2>
+    @if (settings().allocations.length === 0) {
+      <p class="empty">No allocations</p>
+    } @else {
+      <ul class="list">
+        @for (allocation of settings().allocations; track allocation.id) {
+          <li class="list-row" [attr.data-testid]="'allocation-' + allocation.id">
+            <span class="issue-key">{{ allocation.issueKey }}</span>
+            <span class="summary">{{ allocation.summary }}</span>
+            <span class="percentage">{{ allocation.percentage }}%</span>
+            <button
+              type="button"
+              class="remove-button"
+              [attr.data-testid]="'remove-allocation-' + allocation.id"
+              (click)="removeAllocation(allocation.id)"
+            >
+              Remove
+            </button>
+          </li>
+        }
+      </ul>
+    }
+    <form class="add-form" data-testid="allocation-form" (submit)="addAllocation($event)">
+      <input
+        data-testid="alloc-issue-key"
+        [value]="allocIssueKey()"
+        (input)="onAllocIssueKeyInput($event)"
+        placeholder="Issue key"
+      />
+      <input
+        data-testid="alloc-summary"
+        [value]="allocSummary()"
+        (input)="onAllocSummaryInput($event)"
+        placeholder="Summary"
+      />
+      <input
+        type="number"
+        min="0"
+        max="100"
+        data-testid="alloc-percentage"
+        [value]="allocPercentage()"
+        (input)="onAllocPercentageInput($event)"
+        placeholder="Percentage"
+      />
+      <button type="submit">Add allocation</button>
+    </form>
+  </section>
+
+  <section class="section">
+    <h2>Schedules</h2>
+    @if (settings().schedules.length === 0) {
+      <p class="empty">No schedules</p>
+    } @else {
+      <ul class="list">
+        @for (schedule of settings().schedules; track schedule.id) {
+          <li class="list-row" [attr.data-testid]="'schedule-' + schedule.id">
+            <span class="issue-key">{{ schedule.issueKey }}</span>
+            <span class="summary">{{ schedule.summary }}</span>
+            <span class="weekdays">{{ schedule.weekdays.map(d => weekdayNames[d - 1]).join(', ') }}</span>
+            <span class="time">{{ schedule.startTime }} · {{ schedule.durationSeconds / 3600 }}h</span>
+            <button
+              type="button"
+              class="remove-button"
+              [attr.data-testid]="'remove-schedule-' + schedule.id"
+              (click)="removeSchedule(schedule.id)"
+            >
+              Remove
+            </button>
+          </li>
+        }
+      </ul>
+    }
+    <form class="add-form" data-testid="schedule-form" (submit)="addSchedule($event)">
+      <input
+        data-testid="sched-issue-key"
+        [value]="schedIssueKey()"
+        (input)="onSchedIssueKeyInput($event)"
+        placeholder="Issue key"
+      />
+      <input
+        data-testid="sched-summary"
+        [value]="schedSummary()"
+        (input)="onSchedSummaryInput($event)"
+        placeholder="Summary"
+      />
+      <div class="weekday-picker">
+        @for (day of [1, 2, 3, 4, 5]; track day) {
+          <label>
+            <input
+              type="checkbox"
+              [checked]="scheduleWeekdayChecked(day)"
+              (change)="toggleScheduleWeekday(day)"
+              [attr.data-testid]="'sched-weekday-' + day"
+            />
+            {{ weekdayNames[day - 1] }}
+          </label>
+        }
+      </div>
+      <input
+        type="time"
+        data-testid="sched-start-time"
+        [value]="schedStartTime()"
+        (input)="onSchedStartTimeInput($event)"
+      />
+      <input
+        type="number"
+        step="0.25"
+        min="0"
+        data-testid="sched-duration"
+        [value]="schedDurationHours()"
+        (input)="onSchedDurationInput($event)"
+        placeholder="Duration (hours)"
+      />
+      <button type="submit">Add schedule</button>
+    </form>
+  </section>
+
+  <section class="section">
+    <h2>Jira</h2>
+    <p class="hint">Credentials are stored locally only.</p>
+    <form class="add-form" data-testid="credentials-form" (submit)="saveCredentials($event)">
+      <input
+        data-testid="cred-email"
+        [value]="credEmail() ?? credentials()?.email ?? ''"
+        (input)="onCredEmailInput($event)"
+        placeholder="Email"
+      />
+      <input
+        type="password"
+        data-testid="cred-token"
+        [value]="credToken() ?? credentials()?.apiToken ?? ''"
+        (input)="onCredTokenInput($event)"
+        placeholder="API token"
+      />
+      <input
+        data-testid="cred-host"
+        [value]="credHost() ?? credentials()?.host ?? ''"
+        (input)="onCredHostInput($event)"
+        placeholder="Host URL"
+      />
+      <button type="submit">Save</button>
+    </form>
+    <button type="button" class="clear-button" data-testid="clear-credentials" (click)="clearCredentials()">
+      Clear credentials
+    </button>
+  </section>
+</div>
