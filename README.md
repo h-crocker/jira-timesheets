@@ -23,7 +23,7 @@ directly.
 By default the app talks to the mock at `http://localhost:3000`. To use real Jira, enter your Atlassian
 email, an [API token](https://id.atlassian.com/manage-profile/security/api-tokens) and your site URL
 (e.g. `https://your-site.atlassian.net`) in the **Jira** section of the settings panel. Credentials are kept
-in `localStorage` and are only sent to Jira; use *Clear credentials* to go back to the mock.
+in `localStorage` and are only sent to Jira; use _Clear credentials_ to go back to the mock.
 
 For each week shown, the app loads **your own** worklogs from any issue (found by searching for
 `worklogAuthor = currentUser()`), plus the issues named in your settings. Colleagues' worklogs on shared
@@ -37,7 +37,7 @@ token. Behind a TLS-inspecting corporate proxy, start the app with `NODE_EXTRA_C
 
 ## Filling allocations from your activity
 
-Under the calendar, **Fill allocations from activity** sets the allocations for the week on screen from
+In the **Allocations** section, **Fill … from activity** sets the allocations for the week on screen from
 what you worked on that week:
 
 - **GitHub**: pull requests you opened, committed to or reviewed (approved or requested changes). Your
@@ -45,9 +45,11 @@ what you worked on that week:
 - **Jira**: the worklogs Jira added for you automatically, e.g. when an issue moved to Done.
 
 Each kind of evidence has a weight, capped per issue per day, and a quiet day between two days on the same
-issue counts as a little work on it. The weights become whole percentages that add up to 100. The week then
-uses those allocations instead of your usual ones; other weeks are unaffected. **Use my usual allocations**
-goes back.
+issue counts as a little work on it. The weights become whole percentages that add up to 100, and they fill
+the **Allocations** section for that week, each with a line saying what it came from (pull requests with no
+Jira key show under the placeholder ticket). The week then uses those allocations instead of your usual
+ones; other weeks are unaffected. While a week has its own allocations, adding or removing one in the
+section edits that week's list, and **Use my usual allocations** goes back.
 
 A week with its own allocations **replaces** Jira's automatic worklogs: the plan deletes them (shown struck
 through in the preview) and allocations fill the whole week. Before deleting them, the sync saves a copy in
@@ -65,8 +67,8 @@ with it are not logged. Tick **On leave** on a day in the preview to fill that d
 sync; untick it to remove the leave the app logged.
 
 **GitHub**: in the **GitHub** section, enter a
-[fine-grained token](https://github.com/settings/personal-access-tokens) with read-only access to *Pull
-requests* and *Metadata* on the repositories you work in (authorised for SSO if your organisation enforces
+[fine-grained token](https://github.com/settings/personal-access-tokens) with read-only access to _Pull
+requests_ and _Metadata_ on the repositories you work in (authorised for SSO if your organisation enforces
 it). Leave the API URL empty for github.com, or use your GitHub Enterprise Server's `https://host/api/v3`.
 To use the mock, enter any token and `http://localhost:3001`. Optionally limit the search to some
 organisations. GitHub is only read when you press the button; without a token, only Jira's automatic
@@ -94,7 +96,7 @@ npm run build
 - `GithubIntegrationService` / `ActivityService` / `activity-mapping.ts`: read your pull request activity
   from the GitHub REST API, find each pull request's Jira keys, check them against Jira and turn the
   activity into evidence.
-- Display components (`week-selector`, `settings-panel`, `calendar-grid`, `activity-panel`) use only
+- Display components (`week-selector`, `settings-panel`, `calendar-grid`) use only
   signal inputs and outputs, with no dependency injection. `App` is the single smart component.
 - `mock-jira-server.ts` mirrors Jira Cloud where the app depends on it: v3 comments in Atlassian Document
   Format, account IDs, Jira's `started` date format, per-user worklogs, worklog properties (returned only

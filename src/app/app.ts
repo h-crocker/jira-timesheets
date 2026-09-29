@@ -9,7 +9,6 @@ import {
 } from '@angular/core';
 import type {
   ActivityEvent,
-  ActivityIssueSummary,
   CalendarEvent,
   EngineInput,
   ExecutionPlan,
@@ -18,10 +17,8 @@ import type {
   JiraWorklog,
   PercentageAllocation,
   RecurringSchedule,
-  UnkeyedPullRequest,
   UserSettings,
 } from './models/domain';
-import { ActivityPanelComponent } from './components/activity-panel/activity-panel';
 import { CalendarGridComponent } from './components/calendar-grid/calendar-grid';
 import {
   type ActivitySettingsChange,
@@ -71,18 +68,15 @@ function addDays(date: Date, days: number): Date {
   return result;
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unexpected error';
 }
 
 @Component({
   selector: 'app-root',
-  imports: [
-    WeekSelectorComponent,
-    SettingsPanelComponent,
-    CalendarGridComponent,
-    ActivityPanelComponent,
-  ],
+  imports: [WeekSelectorComponent, SettingsPanelComponent, CalendarGridComponent],
   styleUrl: './app.scss',
   templateUrl: './app.html',
 })
@@ -172,69 +166,41 @@ export class App {
     return [...existing, ...planned];
   });
 
-  /** The evidence behind each of the week's allocations, from the last fill. */
-  readonly activityIssues = computed<ActivityIssueSummary[]>(() => {
-    const fill = this.fill();
-    if (fill === null) {
-      return [];
-    }
-    const percentages = new Map(
-      (this.weekAllocations() ?? []).map((allocation) => [
-        allocation.issueKey,
-        allocation.percentage,
-      ]),
-    );
-    const issues = new Map<string, ActivityIssueSummary>();
-    for (const event of fill.evidence) {
-      let entry = issues.get(event.issueKey);
-      if (entry === undefined) {
-        entry = {
-          issueKey: event.issueKey,
-          summary: fill.activity.summaries.get(event.issueKey) ?? '',
-          percentage: percentages.get(event.issueKey) ?? 0,
-          pullRequests: [],
-          jiraWorklogs: 0,
-        };
-        issues.set(event.issueKey, entry);
-      }
-      if (event.kind === 'jira-worklog') {
-        entry.jiraWorklogs++;
-        continue;
-      }
-      const name = event.id.replace(/^gh:([^:]+):.*$/, '$1');
-      const pull = entry.pullRequests.find((candidate) => candidate.name === name);
-      if (pull === undefined) {
-        entry.pullRequests.push({ name, url: event.url, actions: 1 });
-      } else {
-        pull.actions++;
-      }
-    }
-    return [...issues.values()];
+  /** The week on show, e.g. "Sep 28 – Oct 4". */
+  readonly weekLabel = computed(() => {
+    const start = this.currentWeek();
+    const end = addDays(start, 6);
+    const day = (date: Date) => `${MONTHS[date.getMonth()]} ${date.getDate()}`;
+    return `${day(start)} – ${day(end)}`;
   });
 
-  readonly unkeyedPullRequests = computed<UnkeyedPullRequest[]>(() =>
-    (this.fill()?.activity.pulls ?? [])
-      .filter((mapped) => mapped.unkeyed)
-      .map(({ pull }) => ({
-        name: `${pull.repo}#${pull.number}`,
-        title: pull.title,
-        url: pull.url,
-      })),
-  );
-
-  readonly activityWarnings = computed<string[]>(() => {
+  /** What each of the week's allocations was filled from, by issue, from the last fill. */
+  readonly allocationEvidence = computed<Record<string, string>>(() => {
     const fill = this.fill();
     if (fill === null) {
-      return [];
+      return {};
     }
-    const warnings = [...fill.activity.warnings];
-    if (
-      this.settings().placeholderIssueKey.trim() === '' &&
-      this.unkeyedPullRequests().length > 0
-    ) {
-      warnings.push('Some pull requests have no Jira key. Set a placeholder ticket to log them.');
+    const byIssue = new Map<string, { pulls: Map<string, number>; jiraWorklogs: number }>();
+    for (const event of fill.evidence) {
+      const entry = byIssue.get(event.issueKey) ?? { pulls: new Map(), jiraWorklogs: 0 };
+      byIssue.set(event.issueKey, entry);
+      if (event.kind === 'jira-worklog') {
+        entry.jiraWorklogs++;
+      } else {
+        const name = event.id.replace(/^gh:([^:]+):.*$/, '$1');
+        entry.pulls.set(name, (entry.pulls.get(name) ?? 0) + 1);
+      }
     }
-    return warnings;
+    const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+    return Object.fromEntries(
+      [...byIssue].map(([issueKey, { pulls, jiraWorklogs }]) => [
+        issueKey,
+        [
+          ...[...pulls].map(([name, actions]) => `${name} (${plural(actions, 'action')})`),
+          ...(jiraWorklogs > 0 ? [plural(jiraWorklogs, 'automatic worklog')] : []),
+        ].join(', '),
+      ]),
+    );
   });
 
   readonly hasPendingChanges = computed(
@@ -257,7 +223,7 @@ export class App {
     for (const schedule of settings.schedules) {
       keys.add(schedule.issueKey);
     }
-    for (const allocation of [...settings.allocations, ...(this.weekAllocations() ?? [])]) {
+    for (const allocation of settings.allocations) {
       keys.add(allocation.issueKey);
     }
     return [...keys]
@@ -292,12 +258,26 @@ export class App {
     this.settingsService.updateSettings(change);
   }
 
+  /** Adds to the allocations on show: the week's own, if it has them, else the usual ones. */
   protected onAllocationAdded(allocation: PercentageAllocation): void {
-    this.settingsService.addAllocation(allocation);
+    const own = this.weekAllocations();
+    if (own === null) {
+      this.settingsService.addAllocation(allocation);
+    } else {
+      this.settingsService.setWeekAllocations(weekKey(this.currentWeek()), [...own, allocation]);
+    }
   }
 
   protected onAllocationRemoved(id: string): void {
-    this.settingsService.removeAllocation(id);
+    const own = this.weekAllocations();
+    if (own === null) {
+      this.settingsService.removeAllocation(id);
+    } else {
+      this.settingsService.setWeekAllocations(
+        weekKey(this.currentWeek()),
+        own.filter((allocation) => allocation.id !== id),
+      );
+    }
   }
 
   protected onScheduleAdded(schedule: RecurringSchedule): void {
@@ -370,15 +350,31 @@ export class App {
       const activityWeek = { ...jiraOnly, activity: activity.events };
       const allocations = activityAllocations(activityWeek, activity.summaries);
       this.lastFill.set({ week: weekKey(week), activity, evidence: weekEvidence(activityWeek) });
+      const warnings = [...activity.warnings];
+      if (
+        settings.placeholderIssueKey.trim() === '' &&
+        activity.pulls.some((mapped) => mapped.unkeyed)
+      ) {
+        warnings.push('Some pull requests have no Jira key. Set a placeholder ticket to log them.');
+      }
       if (allocations.length === 0) {
         this.status.set({
           kind: 'error',
-          message: 'No activity found this week. Set a placeholder ticket to fill it anyway.',
+          message: [
+            'No activity found this week. Set a placeholder ticket to fill it anyway.',
+            ...warnings,
+          ].join(' '),
         });
         return;
       }
-      this.status.set({ kind: 'idle' });
       this.settingsService.setWeekAllocations(weekKey(week), allocations);
+      this.status.set({
+        kind: 'success',
+        message: [
+          `Filled the allocations for ${this.weekLabel()} from your activity.`,
+          ...warnings,
+        ].join(' '),
+      });
     } catch (error) {
       this.status.set({
         kind: 'error',
@@ -468,7 +464,15 @@ export class App {
   // The user's worklogs anywhere in Jira that week, plus the configured issues so that worklogs
   // this app just wrote show up before Jira's search index catches up.
   private fetchWorklogs(week: Date): Promise<JiraWorklog[]> {
-    const keys = this.issueKeys();
-    return this.jira.fetchMyWorklogs(week, addDays(week, 7), keys === '' ? [] : keys.split(','));
+    const own = this.settings().weekAllocations[weekKey(week)] ?? [];
+    const keys = [
+      ...new Set([
+        ...this.issueKeys()
+          .split(',')
+          .filter((key) => key !== ''),
+        ...own.map((allocation) => allocation.issueKey),
+      ]),
+    ];
+    return this.jira.fetchMyWorklogs(week, addDays(week, 7), keys);
   }
 }

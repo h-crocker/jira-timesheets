@@ -24,10 +24,20 @@ export class SettingsPanelComponent {
   settings = input.required<UserSettings>();
   credentials = input<JiraCredentials | null>(null);
   githubCredentials = input<GithubCredentials | null>(null);
+  /** The allocations of the week on show, when it has its own; null when it uses the usual ones. */
+  weekAllocations = input<PercentageAllocation[] | null>(null);
+  /** The week on show, e.g. "Sep 28 – Oct 4". */
+  weekLabel = input('');
+  /** What each of the week's allocations was filled from, by issue key. */
+  allocationEvidence = input<Record<string, string>>({});
+  /** Disables filling while the app is busy. */
+  busy = input(false);
 
   workHoursChanged = output<{ startTime: string; hoursPerDay: number; workDays: number[] }>();
   allocationAdded = output<PercentageAllocation>();
   allocationRemoved = output<string>();
+  fillFromActivity = output<void>();
+  useUsualAllocations = output<void>();
   scheduleAdded = output<RecurringSchedule>();
   scheduleRemoved = output<string>();
   credentialsChanged = output<JiraCredentials | null>();
@@ -61,6 +71,11 @@ export class SettingsPanelComponent {
   protected readonly credToken = signal<string | null>(null);
   protected readonly credHost = signal<string | null>(null);
 
+  /** The allocations the week on show uses: its own, or the usual ones. */
+  protected shownAllocations(): PercentageAllocation[] {
+    return this.weekAllocations() ?? this.settings().allocations;
+  }
+
   protected effectiveStartTime(): string {
     return this.startTime() ?? this.settings().startTime;
   }
@@ -89,7 +104,7 @@ export class SettingsPanelComponent {
   protected toggleWorkDay(day: number): void {
     const current = this.workDays() ?? this.settings().workDays;
     const next = current.includes(day)
-      ? current.filter(d => d !== day)
+      ? current.filter((d) => d !== day)
       : [...current, day].sort((a, b) => a - b);
     this.workDays.set(next);
   }
@@ -153,7 +168,7 @@ export class SettingsPanelComponent {
     const current = this.schedWeekdays();
     this.schedWeekdays.set(
       current.includes(day)
-        ? current.filter(d => d !== day)
+        ? current.filter((d) => d !== day)
         : [...current, day].sort((a, b) => a - b),
     );
   }

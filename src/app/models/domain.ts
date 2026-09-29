@@ -115,20 +115,3 @@ export interface EngineInput {
   /** Weekdays marked as leave, 1 = Monday, as in `workDays`. */
   leaveDays?: number[];
 }
-
-/** One issue the week's evidence points at, as the activity panel shows it. */
-export interface ActivityIssueSummary {
-  issueKey: string;
-  summary: string;
-  /** Its share of the week's allocations. */
-  percentage: number;
-  pullRequests: Array<{ name: string; url?: string; actions: number }>;
-  jiraWorklogs: number;
-}
-
-/** A pull request with no Jira key, whose work goes to the placeholder ticket (if set). */
-export interface UnkeyedPullRequest {
-  name: string;
-  title: string;
-  url: string;
-}

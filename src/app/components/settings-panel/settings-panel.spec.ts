@@ -163,4 +163,45 @@ describe('SettingsPanelComponent', () => {
 
     expect(emitted).toEqual([{ token: 'gh-token', apiUrl: 'https://api.github.com' }, null]);
   });
+
+  it("shows the week's own allocations, with what each came from, in place of the usual ones", () => {
+    const fixture = create();
+    fixture.componentRef.setInput('weekLabel', 'Sep 28 – Oct 4');
+    fixture.detectChanges();
+    expect(q(fixture, 'allocations-scope').textContent).toContain('Your usual allocations');
+    expect(q(fixture, 'allocation-a1').textContent).toContain('GWP-2070');
+    expect(q(fixture, 'fill-from-activity').textContent).toContain('Fill Sep 28 – Oct 4 from activity');
+    expect(q(fixture, 'use-usual-allocations')).toBeNull();
+
+    fixture.componentRef.setInput('weekAllocations', [
+      { id: 'activity-GWP-8', issueKey: 'GWP-8', summary: 'SSO login', percentage: 100 },
+    ]);
+    fixture.componentRef.setInput('allocationEvidence', { 'GWP-8': 'acme/web#52 (2 actions)' });
+    fixture.detectChanges();
+
+    expect(q(fixture, 'allocations-scope').textContent).toContain('For Sep 28 – Oct 4 only');
+    expect(q(fixture, 'allocation-a1')).toBeNull();
+    const row = q(fixture, 'allocation-activity-GWP-8');
+    expect(row.textContent).toContain('100%');
+    expect(row.querySelector('[data-testid="allocation-evidence"]')!.textContent).toBe(
+      'acme/web#52 (2 actions)',
+    );
+  });
+
+  it('emits fillFromActivity and useUsualAllocations, and disables filling while busy', () => {
+    const fixture = create();
+    fixture.componentRef.setInput('weekAllocations', []);
+    fixture.detectChanges();
+    const events: string[] = [];
+    fixture.componentInstance.fillFromActivity.subscribe(() => events.push('fill'));
+    fixture.componentInstance.useUsualAllocations.subscribe(() => events.push('usual'));
+
+    q(fixture, 'fill-from-activity').click();
+    q(fixture, 'use-usual-allocations').click();
+    expect(events).toEqual(['fill', 'usual']);
+
+    fixture.componentRef.setInput('busy', true);
+    fixture.detectChanges();
+    expect(q<HTMLButtonElement>(fixture, 'fill-from-activity').disabled).toBe(true);
+  });
 });

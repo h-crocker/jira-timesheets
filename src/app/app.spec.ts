@@ -398,9 +398,9 @@ describe('App (smart component)', () => {
       }
 
       expect(urls.some((url) => url.startsWith(githubUrl))).toBe(false);
-      expect(q(fixture, 'activity-panel').textContent).toContain(
-        'This week uses your usual allocations.',
-      );
+      expect(q(fixture, 'allocations-scope').textContent).toContain('Your usual allocations');
+      expect(q(fixture, 'allocation-u').textContent).toContain('GWP-9');
+      expect(root(fixture).querySelector('[data-testid="activity-panel"]')).toBeNull();
       const plan = fixture.componentInstance.plan();
       expect(new Set(plan.creations.map((creation) => creation.issueKey))).toEqual(
         new Set(['GWP-9']),
@@ -425,15 +425,22 @@ describe('App (smart component)', () => {
       expect(allocations.find((a) => a.issueKey === 'GWP-2070')?.summary).toBe(
         'Rate limiting for the public API',
       );
-      const row = q(fixture, 'week-allocation-GWP-2070');
+      // The Allocations section now shows the week's allocations, with what each came from.
+      expect(q(fixture, 'allocations-scope').textContent).toContain('Sep 28 – Oct 4 only');
+      expect(root(fixture).querySelector('[data-testid="allocation-u"]')).toBeNull();
+      const row = q(fixture, 'allocation-activity-GWP-2070');
+      expect(row.textContent).toContain('Rate limiting for the public API');
       expect(row.textContent).toContain('acme/api#41');
       expect(row.textContent).toContain('automatic worklog');
-      const unkeyed = Array.from(
-        root(fixture).querySelectorAll('[data-testid="unkeyed-pull-request"] a'),
-      ).map((link) => link.textContent);
-      expect(unkeyed.sort()).toEqual(['acme/tools#7', 'personal/dotfiles#3']);
+      // Pull requests with no Jira key go to the placeholder ticket.
+      const placeholder = q(fixture, 'allocation-activity-GWP-100').textContent;
+      expect(placeholder).toContain('acme/tools#7');
+      expect(placeholder).toContain('personal/dotfiles#3');
       // A pull request you only commented on is not your work.
-      expect(q(fixture, 'activity-panel').textContent).not.toContain('acme/web#60');
+      expect(q(fixture, 'settings-panel-allocations').textContent).not.toContain('acme/web#60');
+      expect(q(fixture, 'status').textContent).toContain(
+        'Filled the allocations for Sep 28 – Oct 4 from your activity.',
+      );
 
       const plan = app.plan();
       expect(plan.deletions.map((deletion) => deletion.reason)).toEqual(
@@ -460,20 +467,47 @@ describe('App (smart component)', () => {
     it('goes back to the usual allocations', async () => {
       const fixture = await setUp(withGithub);
       await fill(fixture);
-      q(fixture, 'clear-week-allocations').click();
+      q(fixture, 'use-usual-allocations').click();
       await settle(fixture);
 
       expect(weekAllocations()).toEqual({});
-      expect(q(fixture, 'activity-panel').textContent).toContain(
-        'This week uses your usual allocations.',
-      );
+      expect(q(fixture, 'allocations-scope').textContent).toContain('Your usual allocations');
+      expect(q(fixture, 'allocation-u').textContent).toContain('GWP-9');
       expect(fixture.componentInstance.plan().deletions).toEqual([]);
+    });
+
+    it("edits the week's own allocations, not the usual ones, once the week has them", async () => {
+      const fixture = await setUp(withGithub);
+      await fill(fixture);
+      const settings = TestBed.inject(SettingsService);
+      const filled = weekAllocations()[WEEK_KEY];
+
+      q(fixture, 'remove-allocation-activity-GWP-100').click();
+      const type = (id: string, value: string) => {
+        const field = q(fixture, id) as HTMLInputElement;
+        field.value = value;
+        field.dispatchEvent(new Event('input'));
+      };
+      type('alloc-issue-key', 'GWP-1999');
+      type('alloc-summary', 'Design');
+      type('alloc-percentage', '10');
+      q(fixture, 'allocation-form').dispatchEvent(new Event('submit', { cancelable: true }));
+      await settle(fixture);
+
+      expect(weekAllocations()[WEEK_KEY].map((allocation) => allocation.issueKey)).toEqual([
+        ...filled.map((allocation) => allocation.issueKey).filter((key) => key !== 'GWP-100'),
+        'GWP-1999',
+      ]);
+      expect(settings.settings().allocations.map((allocation) => allocation.issueKey)).toEqual([
+        'GWP-9',
+      ]);
+      expect(q(fixture, 'allocation-activity-GWP-2070')).toBeTruthy();
     });
 
     it('fills from Jira alone without GitHub, and says so', async () => {
       const fixture = await setUp();
       await fill(fixture);
-      expect(q(fixture, 'activity-warning').textContent).toContain("GitHub isn't set up");
+      expect(q(fixture, 'status').textContent).toContain("GitHub isn't set up");
       expect(
         weekAllocations()
           [WEEK_KEY].map((allocation) => allocation.issueKey)

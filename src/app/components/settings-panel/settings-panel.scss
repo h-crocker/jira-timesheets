@@ -73,6 +73,18 @@
   }
 }
 
+.allocation .evidence {
+  margin: 0.125rem 0 0;
+  color: #52606d;
+  font-size: 0.75rem;
+}
+
+.allocation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .empty {
   color: #707070;
   font-size: 0.875rem;
@@ -118,4 +130,9 @@
   border-radius: 0.25rem;
   padding: 0.25rem 0.75rem;
   cursor: pointer;
+}
+
+.save-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

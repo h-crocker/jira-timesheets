@@ -8,6 +8,8 @@ only (`settings.weekAllocations`). A week with its own allocations replaces Jira
 it syncs, as below; the allocation fill then spreads the time across the week. The evidence, weights, key
 finding, leave, placeholder, ownership marker and saved copies are as described here. §6 (sharing each day
 in blocks) and "never fill the future" no longer apply, and GitHub is only read when the button is pressed.
+The button and the week's allocations live in the settings panel's **Allocations** section, which shows
+the allocations the week on screen uses; there is no separate activity panel (§9).
 
 
 All six phases are implemented. Where the code differs from the plan below:

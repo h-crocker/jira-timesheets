@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 describe('display components', () => {
-  const dirs = ['week-selector', 'calendar-grid', 'settings-panel', 'activity-panel'];
+  const dirs = ['week-selector', 'calendar-grid', 'settings-panel'];
 
   for (const dir of dirs) {
     it(`${dir} has no dependency injection`, () => {
