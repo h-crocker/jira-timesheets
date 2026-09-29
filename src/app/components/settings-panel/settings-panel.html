@@ -43,28 +43,114 @@
   </section>
 
   <section class="section">
+    <h2>Activity</h2>
+    <p class="hint">
+      <strong>Fill from activity</strong>, under Allocations, sets a week's allocations from your
+      GitHub pull requests and Jira's automatic worklogs.
+    </p>
+    <label class="field">
+      <span>Leave ticket</span>
+      <input
+        data-testid="leave-issue-key"
+        [value]="effectiveLeaveIssueKey()"
+        (input)="onLeaveIssueKeyInput($event)"
+        placeholder="e.g. HR-1"
+      />
+    </label>
+    <label class="field">
+      <span>Placeholder ticket</span>
+      <input
+        data-testid="placeholder-issue-key"
+        [value]="effectivePlaceholderIssueKey()"
+        (input)="onPlaceholderIssueKeyInput($event)"
+        placeholder="For work with no Jira key"
+      />
+    </label>
+    <label class="field">
+      <span>GitHub organisations (optional)</span>
+      <input
+        data-testid="github-orgs"
+        [value]="effectiveGithubOrgs()"
+        (input)="onGithubOrgsInput($event)"
+        placeholder="All organisations"
+      />
+    </label>
+    <button
+      type="button"
+      class="save-button"
+      data-testid="save-activity-settings"
+      (click)="saveActivitySettings()"
+    >
+      Save
+    </button>
+  </section>
+
+  <section class="section" data-testid="settings-panel-allocations">
     <h2>Allocations</h2>
-    @if (settings().allocations.length === 0) {
+    @if (weekAllocations() !== null) {
+      <p class="hint" data-testid="allocations-scope">
+        For {{ weekLabel() }} only, filled from your activity. Syncing replaces the worklogs Jira added
+        automatically.
+      </p>
+    } @else {
+      <p class="hint" data-testid="allocations-scope">Your usual allocations, used by every week.</p>
+    }
+    @if (shownAllocations().length === 0) {
       <p class="empty">No allocations</p>
     } @else {
       <ul class="list">
-        @for (allocation of settings().allocations; track allocation.id) {
-          <li class="list-row" [attr.data-testid]="'allocation-' + allocation.id">
-            <span class="issue-key">{{ allocation.issueKey }}</span>
-            <span class="summary">{{ allocation.summary }}</span>
-            <span class="percentage">{{ allocation.percentage }}%</span>
-            <button
-              type="button"
-              class="remove-button"
-              [attr.data-testid]="'remove-allocation-' + allocation.id"
-              (click)="removeAllocation(allocation.id)"
-            >
-              Remove
-            </button>
+        @for (allocation of shownAllocations(); track allocation.id) {
+          <li class="allocation" [attr.data-testid]="'allocation-' + allocation.id">
+            <div class="list-row">
+              <span class="issue-key">{{ allocation.issueKey }}</span>
+              <span class="summary">{{ allocation.summary }}</span>
+              <span class="percentage">{{ allocation.percentage }}%</span>
+              <button
+                type="button"
+                class="remove-button"
+                [attr.data-testid]="'remove-allocation-' + allocation.id"
+                (click)="removeAllocation(allocation.id)"
+              >
+                Remove
+              </button>
+            </div>
+            @if (allocationEvidence()[allocation.issueKey]; as evidence) {
+              <p class="evidence" data-testid="allocation-evidence">{{ evidence }}</p>
+            }
           </li>
         }
       </ul>
+      @if (allocationTotal() > 100) {
+        <p class="hint" data-testid="allocations-total">
+          These add up to {{ allocationTotal() }}%, so each gets its share of the week in proportion.
+        </p>
+      } @else if (allocationTotal() < 100) {
+        <p class="hint" data-testid="allocations-total">
+          These add up to {{ allocationTotal() }}%, so part of the week is left empty.
+        </p>
+      }
     }
+    <div class="allocation-actions">
+      <button
+        type="button"
+        class="save-button"
+        data-testid="fill-from-activity"
+        [disabled]="busy()"
+        (click)="fillFromActivity.emit()"
+      >
+        Fill {{ weekLabel() }} from activity
+      </button>
+      @if (weekAllocations() !== null) {
+        <button
+          type="button"
+          class="clear-button"
+          data-testid="use-usual-allocations"
+          (click)="useUsualAllocations.emit()"
+        >
+          Use my usual allocations
+        </button>
+      }
+    </div>
     <form class="add-form" data-testid="allocation-form" (submit)="addAllocation($event)">
       <input
         data-testid="alloc-issue-key"
@@ -187,6 +273,37 @@
     </form>
     <button type="button" class="clear-button" data-testid="clear-credentials" (click)="clearCredentials()">
       Clear credentials
+    </button>
+  </section>
+
+  <section class="section">
+    <h2>GitHub</h2>
+    <p class="hint">
+      A read-only token for your pull requests. Stored locally and only sent to GitHub.
+    </p>
+    <form class="add-form" data-testid="github-form" (submit)="saveGithubCredentials($event)">
+      <input
+        type="password"
+        data-testid="github-token"
+        [value]="githubToken() ?? githubCredentials()?.token ?? ''"
+        (input)="onGithubTokenInput($event)"
+        placeholder="Token"
+      />
+      <input
+        data-testid="github-api-url"
+        [value]="githubApiUrl() ?? githubCredentials()?.apiUrl ?? ''"
+        (input)="onGithubApiUrlInput($event)"
+        placeholder="https://api.github.com"
+      />
+      <button type="submit">Save</button>
+    </form>
+    <button
+      type="button"
+      class="clear-button"
+      data-testid="clear-github"
+      (click)="clearGithubCredentials()"
+    >
+      Clear GitHub token
     </button>
   </section>
 </div>

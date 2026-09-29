@@ -22,6 +22,15 @@
   font-size: 0.875rem;
 }
 
+.leave-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+  font-weight: 400;
+  font-size: 0.75rem;
+}
+
 .events {
   display: flex;
   flex-direction: column;
@@ -37,6 +46,16 @@
   background: rgba(0, 0, 0, 0.03);
   padding: 0.375rem 0.5rem;
   font-size: 0.75rem;
+}
+
+.event-row.pending-deletion {
+  opacity: 0.55;
+  text-decoration: line-through;
+  border-left-color: #b42318;
+}
+
+.source-badge[data-source='leave'] {
+  background: #dcfce7;
 }
 
 .time-range {

@@ -1,5 +1,6 @@
 import { Component, input, output, signal } from '@angular/core';
 import type {
+  GithubCredentials,
   JiraCredentials,
   PercentageAllocation,
   RecurringSchedule,
@@ -7,6 +8,12 @@ import type {
 } from '../../models/domain';
 
 const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+const DEFAULT_GITHUB_API_URL = 'https://api.github.com';
+
+export type ActivitySettingsChange = Pick<
+  UserSettings,
+  'leaveIssueKey' | 'placeholderIssueKey' | 'githubOrgs'
+>;
 
 @Component({
   selector: 'app-settings-panel',
@@ -16,13 +23,26 @@ const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 export class SettingsPanelComponent {
   settings = input.required<UserSettings>();
   credentials = input<JiraCredentials | null>(null);
+  githubCredentials = input<GithubCredentials | null>(null);
+  /** The allocations of the week on show, when it has its own; null when it uses the usual ones. */
+  weekAllocations = input<PercentageAllocation[] | null>(null);
+  /** The week on show, e.g. "Sep 28 – Oct 4". */
+  weekLabel = input('');
+  /** What each of the week's allocations was filled from, by issue key. */
+  allocationEvidence = input<Record<string, string>>({});
+  /** Disables filling while the app is busy. */
+  busy = input(false);
 
   workHoursChanged = output<{ startTime: string; hoursPerDay: number; workDays: number[] }>();
   allocationAdded = output<PercentageAllocation>();
   allocationRemoved = output<string>();
+  fillFromActivity = output<void>();
+  useUsualAllocations = output<void>();
   scheduleAdded = output<RecurringSchedule>();
   scheduleRemoved = output<string>();
   credentialsChanged = output<JiraCredentials | null>();
+  activitySettingsChanged = output<ActivitySettingsChange>();
+  githubCredentialsChanged = output<GithubCredentials | null>();
 
   protected readonly weekdayNames = WEEKDAY_NAMES;
 
@@ -40,9 +60,30 @@ export class SettingsPanelComponent {
   protected readonly schedStartTime = signal('');
   protected readonly schedDurationHours = signal(0);
 
+  protected readonly leaveIssueKey = signal<string | null>(null);
+  protected readonly placeholderIssueKey = signal<string | null>(null);
+  protected readonly githubOrgs = signal<string | null>(null);
+
+  protected readonly githubToken = signal<string | null>(null);
+  protected readonly githubApiUrl = signal<string | null>(null);
+
   protected readonly credEmail = signal<string | null>(null);
   protected readonly credToken = signal<string | null>(null);
   protected readonly credHost = signal<string | null>(null);
+
+  /** The allocations the week on show uses: its own, or the usual ones. */
+  protected shownAllocations(): PercentageAllocation[] {
+    return this.weekAllocations() ?? this.settings().allocations;
+  }
+
+  /** What the allocations on show add up to, in percent. */
+  protected allocationTotal(): number {
+    const total = this.shownAllocations().reduce(
+      (sum, allocation) => sum + allocation.percentage,
+      0,
+    );
+    return Math.round(total * 100) / 100;
+  }
 
   protected effectiveStartTime(): string {
     return this.startTime() ?? this.settings().startTime;
@@ -72,7 +113,7 @@ export class SettingsPanelComponent {
   protected toggleWorkDay(day: number): void {
     const current = this.workDays() ?? this.settings().workDays;
     const next = current.includes(day)
-      ? current.filter(d => d !== day)
+      ? current.filter((d) => d !== day)
       : [...current, day].sort((a, b) => a - b);
     this.workDays.set(next);
   }
@@ -136,7 +177,7 @@ export class SettingsPanelComponent {
     const current = this.schedWeekdays();
     this.schedWeekdays.set(
       current.includes(day)
-        ? current.filter(d => d !== day)
+        ? current.filter((d) => d !== day)
         : [...current, day].sort((a, b) => a - b),
     );
   }
@@ -161,6 +202,63 @@ export class SettingsPanelComponent {
 
   protected removeSchedule(id: string): void {
     this.scheduleRemoved.emit(id);
+  }
+
+  protected effectiveLeaveIssueKey(): string {
+    return this.leaveIssueKey() ?? this.settings().leaveIssueKey;
+  }
+
+  protected effectivePlaceholderIssueKey(): string {
+    return this.placeholderIssueKey() ?? this.settings().placeholderIssueKey;
+  }
+
+  protected effectiveGithubOrgs(): string {
+    return this.githubOrgs() ?? this.settings().githubOrgs.join(', ');
+  }
+
+  protected onLeaveIssueKeyInput(event: Event): void {
+    this.leaveIssueKey.set((event.target as HTMLInputElement).value);
+  }
+
+  protected onPlaceholderIssueKeyInput(event: Event): void {
+    this.placeholderIssueKey.set((event.target as HTMLInputElement).value);
+  }
+
+  protected onGithubOrgsInput(event: Event): void {
+    this.githubOrgs.set((event.target as HTMLInputElement).value);
+  }
+
+  protected saveActivitySettings(): void {
+    this.activitySettingsChanged.emit({
+      leaveIssueKey: this.effectiveLeaveIssueKey().trim(),
+      placeholderIssueKey: this.effectivePlaceholderIssueKey().trim(),
+      githubOrgs: this.effectiveGithubOrgs()
+        .split(/[\s,]+/)
+        .filter((org) => org !== ''),
+    });
+  }
+
+  protected onGithubTokenInput(event: Event): void {
+    this.githubToken.set((event.target as HTMLInputElement).value);
+  }
+
+  protected onGithubApiUrlInput(event: Event): void {
+    this.githubApiUrl.set((event.target as HTMLInputElement).value);
+  }
+
+  protected saveGithubCredentials(event: Event): void {
+    event.preventDefault();
+    const apiUrl = (this.githubApiUrl() ?? this.githubCredentials()?.apiUrl ?? '').trim();
+    this.githubCredentialsChanged.emit({
+      token: (this.githubToken() ?? this.githubCredentials()?.token ?? '').trim(),
+      apiUrl: apiUrl === '' ? DEFAULT_GITHUB_API_URL : apiUrl,
+    });
+  }
+
+  protected clearGithubCredentials(): void {
+    this.githubToken.set(null);
+    this.githubApiUrl.set(null);
+    this.githubCredentialsChanged.emit(null);
   }
 
   protected onCredEmailInput(event: Event): void {

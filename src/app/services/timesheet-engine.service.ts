@@ -3,196 +3,228 @@ import type {
   CalendarEvent,
   EngineInput,
   ExecutionPlan,
+  JiraWorklog,
+  PercentageAllocation,
   WorklogCreation,
   WorklogDeletion,
 } from '../models/domain';
+import { clashesWithLeave, planLeave } from './leave-planner';
+import {
+  BLOCK_SECONDS,
+  type Interval,
+  addDays,
+  daySlot,
+  durationSeconds,
+  freeGaps,
+  matchRecorded,
+  overlaps,
+  recurringEvents,
+  sameMinute,
+  weekKey,
+} from './schedule-time';
 
-const ROUNDING_INTERVAL_SECONDS = 900;
-
-interface Interval {
-  start: Date;
-  end: Date;
+function toEvent(worklog: JiraWorklog): CalendarEvent {
+  return {
+    id: worklog.id,
+    issueKey: worklog.issueKey,
+    summary: worklog.comment ?? worklog.issueKey,
+    start: worklog.started,
+    end: new Date(worklog.started.getTime() + worklog.timeSpentSeconds * 1000),
+    timeSpentSeconds: worklog.timeSpentSeconds,
+    source: 'jira',
+    worklogId: worklog.id,
+  };
 }
 
-function addDays(date: Date, days: number): Date {
-  const result = new Date(date.getTime());
-  result.setDate(result.getDate() + days);
-  return result;
+/** The week's free time in working hours, in order, each gap with the whole blocks it holds. */
+function freeWeekGaps(
+  input: EngineInput,
+  occupied: Interval[],
+): Array<{ gap: Interval; blocks: number }> {
+  return input.settings.workDays
+    .map((weekday) => daySlot(input.weekStart, weekday, input.settings))
+    .sort((a, b) => a.start.getTime() - b.start.getTime())
+    .flatMap((slot) => freeGaps(slot, occupied))
+    .map((gap) => ({ gap, blocks: Math.floor(durationSeconds(gap) / BLOCK_SECONDS) }))
+    .filter(({ blocks }) => blocks > 0);
 }
 
-function timeOnDay(day: Date, time: string): Date {
-  const [hours = 0, minutes = 0] = time.split(':').map(Number);
-  const result = new Date(day.getTime());
-  result.setHours(hours, minutes, 0, 0);
-  return result;
-}
-
-function overlaps(a: Interval, b: Interval): boolean {
-  return a.start < b.end && b.start < a.end;
-}
-
-function sameMinute(a: Date, b: Date): boolean {
-  return Math.floor(a.getTime() / 60000) === Math.floor(b.getTime() / 60000);
-}
-
-function freeGaps(slot: Interval, occupied: Interval[]): Interval[] {
-  const relevant = occupied
-    .map((interval) => ({
-      start: new Date(Math.max(interval.start.getTime(), slot.start.getTime())),
-      end: new Date(Math.min(interval.end.getTime(), slot.end.getTime())),
-    }))
-    .filter((interval) => interval.start < interval.end)
-    .sort((a, b) => a.start.getTime() - b.start.getTime());
-
-  const gaps: Interval[] = [];
-  let cursor = slot.start;
-  for (const interval of relevant) {
-    if (interval.start > cursor) {
-      gaps.push({ start: cursor, end: interval.start });
-    }
-    if (interval.end > cursor) {
-      cursor = interval.end;
-    }
+/**
+ * Shares `remaining` seconds of free time between the allocations in 15-minute blocks, in order
+ * from the start of the week. Each allocation's share is rounded down to whole blocks and the
+ * blocks that rounding leaves over go to the largest allocation, so allocations adding up to 100%
+ * fill every free block. Allocations adding up to more than 100% share the week in proportion, so
+ * every one of them gets its part.
+ */
+function fillAllocations(
+  allocations: PercentageAllocation[],
+  gaps: Array<{ gap: Interval; blocks: number }>,
+  remaining: number,
+): WorklogCreation[] {
+  const available = Math.min(
+    gaps.reduce((sum, { blocks }) => sum + blocks, 0),
+    Math.floor(remaining / BLOCK_SECONDS),
+  );
+  const whole = Math.max(
+    100,
+    allocations.reduce((sum, allocation) => sum + allocation.percentage, 0),
+  );
+  const exact = allocations.map((allocation) => (available * allocation.percentage) / whole);
+  const blocks = exact.map((share) => Math.floor(share + 1e-9));
+  const total = Math.min(
+    available,
+    Math.floor(exact.reduce((sum, share) => sum + share, 0) + 1e-9),
+  );
+  if (allocations.length > 0) {
+    const largest = allocations.reduce(
+      (best, allocation, index) =>
+        allocation.percentage > allocations[best].percentage ? index : best,
+      0,
+    );
+    blocks[largest] += Math.max(0, total - blocks.reduce((sum, count) => sum + count, 0));
   }
-  if (cursor < slot.end) {
-    gaps.push({ start: cursor, end: slot.end });
-  }
-  return gaps;
+
+  const creations: WorklogCreation[] = [];
+  let gapIndex = 0;
+  let used = 0;
+  allocations.forEach((allocation, index) => {
+    let left = blocks[index];
+    while (left > 0 && gapIndex < gaps.length) {
+      const { gap, blocks: room } = gaps[gapIndex];
+      const take = Math.min(left, room - used);
+      creations.push({
+        issueKey: allocation.issueKey,
+        started: new Date(gap.start.getTime() + used * BLOCK_SECONDS * 1000).toISOString(),
+        timeSpentSeconds: take * BLOCK_SECONDS,
+        comment: allocation.summary,
+        source: 'allocated',
+      });
+      left -= take;
+      used += take;
+      if (used === room) {
+        gapIndex++;
+        used = 0;
+      }
+    }
+  });
+  return creations;
 }
 
 @Injectable({ providedIn: 'root' })
 export class TimesheetEngineService {
+  /**
+   * Recurring events win over clashing worklogs, leave wins over both, and allocations fill the
+   * rest of the week. The app's own worklogs stay only while the settings still produce them, so a
+   * change to the allocations shows in the plan even once the week has been synced.
+   *
+   * A week whose allocations were filled from activity (`settings.weekAllocations`) uses those and
+   * replaces what Jira logged automatically: every worklog that isn't the app's own, leave or a
+   * recorded recurring event is deleted. Either way, syncing twice changes nothing.
+   */
   computePlan(input: EngineInput): ExecutionPlan {
-    const { weekStart, settings, worklogs } = input;
+    const { weekStart, settings } = input;
     const weekEnd = addDays(weekStart, 7);
-
-    const recurringEvents: CalendarEvent[] = [];
-    for (const schedule of settings.schedules) {
-      if (!schedule.enabled) {
-        continue;
-      }
-      for (const weekday of schedule.weekdays) {
-        if (!settings.workDays.includes(weekday)) {
-          continue;
-        }
-        const start = timeOnDay(addDays(weekStart, weekday - 1), schedule.startTime);
-        recurringEvents.push({
-          id: `${schedule.id}-weekday-${weekday}`,
-          issueKey: schedule.issueKey,
-          summary: schedule.summary,
-          start,
-          end: new Date(start.getTime() + schedule.durationSeconds * 1000),
-          timeSpentSeconds: schedule.durationSeconds,
-          source: 'recurring',
-        });
-      }
-    }
-
-    const jiraEvents: CalendarEvent[] = worklogs
-      .filter((worklog) => worklog.started >= weekStart && worklog.started < weekEnd)
-      .map((worklog) => ({
-        id: worklog.id,
-        issueKey: worklog.issueKey,
-        summary: worklog.comment ?? worklog.issueKey,
-        start: worklog.started,
-        end: new Date(worklog.started.getTime() + worklog.timeSpentSeconds * 1000),
-        timeSpentSeconds: worklog.timeSpentSeconds,
-        source: 'jira' as const,
-        worklogId: worklog.id,
-      }));
+    const ownAllocations = settings.weekAllocations[weekKey(weekStart)];
+    const replacing = ownAllocations !== undefined;
+    const allocations = ownAllocations ?? settings.allocations;
+    const worklogs = input.worklogs.filter(
+      (worklog) => worklog.started >= weekStart && worklog.started < weekEnd,
+    );
+    const leave = planLeave(weekStart, settings, worklogs, input.leaveDays ?? []);
+    const recurringEventsThisWeek = recurringEvents(weekStart, settings).filter(
+      (event) => !clashesWithLeave(event, leave),
+    );
+    const others = worklogs.filter((worklog) => !leave.handled.has(worklog.id));
 
     // A worklog that already records a recurring event (same issue, start and duration) satisfies
     // it, so syncing again neither deletes it nor logs the event twice.
-    const recorded = new Set<string>();
-    const unrecordedEvents = recurringEvents.filter((recurring) => {
-      const record = jiraEvents.find(
-        (jiraEvent) =>
-          !recorded.has(jiraEvent.id) &&
-          jiraEvent.issueKey === recurring.issueKey &&
-          sameMinute(jiraEvent.start, recurring.start) &&
-          jiraEvent.timeSpentSeconds === recurring.timeSpentSeconds,
-      );
-      if (record !== undefined) {
-        recorded.add(record.id);
-      }
-      return record === undefined;
-    });
+    const { recorded, unrecorded } = matchRecorded(recurringEventsThisWeek, others);
 
-    const deletions: WorklogDeletion[] = [];
+    const deletions: WorklogDeletion[] = [...leave.deletions];
+    const absorb: JiraWorklog[] = [];
+    const replaceable: JiraWorklog[] = [];
     const keptJiraEvents: CalendarEvent[] = [];
-    for (const jiraEvent of jiraEvents) {
-      if (recorded.has(jiraEvent.id)) {
+    for (const worklog of others) {
+      if (recorded.has(worklog.id)) {
         continue;
       }
-      const clashesWithRecurring = recurringEvents.some((recurring) => overlaps(recurring, jiraEvent));
-      if (clashesWithRecurring) {
+      const jiraEvent = toEvent(worklog);
+      if (worklog.generated) {
+        replaceable.push(worklog);
+      } else if (replacing) {
         deletions.push({
-          worklogId: jiraEvent.worklogId ?? jiraEvent.id,
-          issueKey: jiraEvent.issueKey,
+          worklogId: worklog.id,
+          issueKey: worklog.issueKey,
+          reason: 'replaced-by-activity',
+        });
+        absorb.push(worklog);
+      } else if (recurringEventsThisWeek.some((recurring) => overlaps(recurring, jiraEvent))) {
+        deletions.push({
+          worklogId: worklog.id,
+          issueKey: worklog.issueKey,
           reason: 'overlap-with-recurring',
+        });
+      } else if (leave.intervals.some((interval) => overlaps(interval, jiraEvent))) {
+        deletions.push({
+          worklogId: worklog.id,
+          issueKey: worklog.issueKey,
+          reason: 'overlap-with-leave',
         });
       } else {
         keptJiraEvents.push(jiraEvent);
       }
     }
 
-    const creations: WorklogCreation[] = unrecordedEvents.map((event) => ({
-      issueKey: event.issueKey,
-      started: event.start.toISOString(),
-      timeSpentSeconds: event.timeSpentSeconds,
-      comment: event.summary,
-    }));
+    const creations: WorklogCreation[] = [
+      ...leave.creations,
+      ...unrecorded.map((event): WorklogCreation => ({
+        issueKey: event.issueKey,
+        started: event.start.toISOString(),
+        timeSpentSeconds: event.timeSpentSeconds,
+        comment: event.summary,
+        source: 'recurring',
+      })),
+    ];
 
     const totalWeekCapacitySeconds = settings.workDays.length * settings.hoursPerDay * 3600;
-    const occupiedSeconds =
-      keptJiraEvents.reduce((sum, event) => sum + event.timeSpentSeconds, 0) +
-      recurringEvents.reduce((sum, event) => sum + event.timeSpentSeconds, 0);
+    const occupied: Interval[] = [
+      ...keptJiraEvents.map((event) => ({ start: event.start, end: event.end })),
+      ...recurringEventsThisWeek.map((event) => ({ start: event.start, end: event.end })),
+      ...leave.intervals,
+    ];
+    const occupiedSeconds = occupied.reduce((sum, interval) => sum + durationSeconds(interval), 0);
     const remaining = totalWeekCapacitySeconds - occupiedSeconds;
 
-    if (remaining > 0) {
-      const occupied: Interval[] = [
-        ...keptJiraEvents.map((event) => ({ start: event.start, end: event.end })),
-        ...recurringEvents.map((event) => ({ start: event.start, end: event.end })),
-      ];
+    const allocated =
+      remaining > 0 ? fillAllocations(allocations, freeWeekGaps(input, occupied), remaining) : [];
 
-      const daySlots: Interval[] = settings.workDays
-        .map((weekday) => {
-          const start = timeOnDay(addDays(weekStart, weekday - 1), settings.startTime);
-          return { start, end: new Date(start.getTime() + settings.hoursPerDay * 3600 * 1000) };
-        })
-        .sort((a, b) => a.start.getTime() - b.start.getTime());
-
-      for (const allocation of settings.allocations) {
-        let allocationRemaining = remaining * (allocation.percentage / 100);
-        for (const slot of daySlots) {
-          if (allocationRemaining <= 0) {
-            break;
-          }
-          for (const gap of freeGaps(slot, occupied)) {
-            if (allocationRemaining <= 0) {
-              break;
-            }
-            const gapLengthSeconds = (gap.end.getTime() - gap.start.getTime()) / 1000;
-            const chunk = Math.min(allocationRemaining, gapLengthSeconds);
-            const rounded = Math.floor(chunk / ROUNDING_INTERVAL_SECONDS) * ROUNDING_INTERVAL_SECONDS;
-            if (rounded <= 0) {
-              continue;
-            }
-            const chunkStart = gap.start;
-            creations.push({
-              issueKey: allocation.issueKey,
-              started: chunkStart.toISOString(),
-              timeSpentSeconds: rounded,
-              comment: allocation.summary,
-            });
-            occupied.push({ start: chunkStart, end: new Date(chunkStart.getTime() + rounded * 1000) });
-            allocationRemaining -= rounded;
-          }
-        }
+    // The app's own worklogs that match the fill stay; the rest go.
+    const kept = new Set<string>();
+    for (const want of allocated) {
+      const existing = replaceable.find(
+        (worklog) =>
+          !kept.has(worklog.id) &&
+          worklog.issueKey === want.issueKey &&
+          sameMinute(worklog.started, new Date(want.started)) &&
+          worklog.timeSpentSeconds === want.timeSpentSeconds,
+      );
+      if (existing === undefined) {
+        creations.push(want);
+      } else {
+        kept.add(existing.id);
+      }
+    }
+    for (const worklog of replaceable) {
+      if (!kept.has(worklog.id)) {
+        deletions.push({
+          worklogId: worklog.id,
+          issueKey: worklog.issueKey,
+          reason: 'stale-generated',
+        });
       }
     }
 
     creations.sort((a, b) => a.started.localeCompare(b.started));
-    return { deletions, creations };
+    return { deletions, creations, absorb };
   }
 }

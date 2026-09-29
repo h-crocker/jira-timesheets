@@ -1,4 +1,4 @@
-import { Component, computed, input } from '@angular/core';
+import { Component, computed, input, output } from '@angular/core';
 import type { CalendarEvent } from '../../models/domain';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -6,6 +6,8 @@ const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 interface DayColumn {
   day: Date;
+  /** Monday = 1, as in `workDays`. */
+  weekday: number;
   events: CalendarEvent[];
 }
 
@@ -17,6 +19,13 @@ interface DayColumn {
 export class CalendarGridComponent {
   events = input.required<CalendarEvent[]>();
   weekStart = input.required<Date>();
+  /** Whether days can be marked as leave (a leave ticket is set). */
+  leaveEnabled = input(false);
+  leaveDays = input<number[]>([]);
+  /** Days whose working hours are all covered by leave logged by hand. */
+  lockedLeaveDays = input<number[]>([]);
+
+  leaveToggled = output<number>();
 
   protected readonly dayColumns = computed<DayColumn[]>(() => {
     const start = this.weekStart();
@@ -26,6 +35,7 @@ export class CalendarGridComponent {
       day.setDate(day.getDate() + offset);
       return {
         day,
+        weekday: offset + 1,
         events: events
           .filter(event => isSameDay(event.start, day))
           .sort((a, b) => a.start.getTime() - b.start.getTime()),
@@ -45,6 +55,14 @@ export class CalendarGridComponent {
     return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(
       day.getDate(),
     ).padStart(2, '0')}`;
+  }
+
+  protected onLeave(weekday: number): boolean {
+    return this.leaveDays().includes(weekday) || this.lockedLeaveDays().includes(weekday);
+  }
+
+  protected leaveLocked(weekday: number): boolean {
+    return this.lockedLeaveDays().includes(weekday);
   }
 
   protected timeRange(event: CalendarEvent): string {

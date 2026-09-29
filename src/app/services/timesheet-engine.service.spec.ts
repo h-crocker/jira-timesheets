@@ -1,5 +1,11 @@
 import { TimesheetEngineService } from './timesheet-engine.service';
-import type { EngineInput, JiraWorklog, UserSettings, WorklogCreation } from '../models/domain';
+import type {
+  EngineInput,
+  ExecutionPlan,
+  JiraWorklog,
+  UserSettings,
+  WorklogCreation,
+} from '../models/domain';
 
 function monday(): Date {
   return new Date(2026, 8, 28, 0, 0, 0, 0);
@@ -19,12 +25,34 @@ function defaultSettings(overrides: Partial<UserSettings> = {}): UserSettings {
     workDays: [1, 2, 3, 4, 5],
     allocations: [],
     schedules: [],
+    weekAllocations: {},
+    leaveIssueKey: '',
+    placeholderIssueKey: '',
+    githubOrgs: [],
     ...overrides,
   };
 }
 
 function worklog(id: string, started: Date, timeSpentSeconds: number, issueKey = 'GWP-2070'): JiraWorklog {
-  return { id, issueKey, started, timeSpentSeconds };
+  return { id, issueKey, started, timeSpentSeconds, generated: false };
+}
+
+/** A worklog this app created. */
+function ours(id: string, started: Date, timeSpentSeconds: number, issueKey: string): JiraWorklog {
+  return { ...worklog(id, started, timeSpentSeconds, issueKey), generated: true };
+}
+
+let synced = 0;
+
+/** The week's worklogs once `plan` has been synced. */
+function applied(worklogs: JiraWorklog[], plan: ExecutionPlan): JiraWorklog[] {
+  const deleted = new Set(plan.deletions.map((deletion) => deletion.worklogId));
+  return [
+    ...worklogs.filter((entry) => !deleted.has(entry.id)),
+    ...plan.creations.map((creation) =>
+      ours(`new-${synced++}`, new Date(creation.started), creation.timeSpentSeconds, creation.issueKey),
+    ),
+  ];
 }
 
 function input(overrides: Partial<EngineInput> = {}): EngineInput {
@@ -58,7 +86,7 @@ describe('TimesheetEngineService', () => {
   const engine = new TimesheetEngineService();
 
   it('returns an empty plan for empty input', () => {
-    expect(engine.computePlan(input())).toEqual({ deletions: [], creations: [] });
+    expect(engine.computePlan(input())).toEqual({ deletions: [], creations: [], absorb: [] });
   });
 
   it('creates one occurrence per scheduled weekday with exact times', () => {
@@ -80,8 +108,8 @@ describe('TimesheetEngineService', () => {
 
     expect(plan.deletions).toEqual([]);
     expect(plan.creations).toEqual([
-      { issueKey: 'GWP-1', started: at(0, 10).toISOString(), timeSpentSeconds: 3600, comment: 'Standup' },
-      { issueKey: 'GWP-1', started: at(2, 10).toISOString(), timeSpentSeconds: 3600, comment: 'Standup' },
+      { issueKey: 'GWP-1', started: at(0, 10).toISOString(), timeSpentSeconds: 3600, comment: 'Standup', source: 'recurring' },
+      { issueKey: 'GWP-1', started: at(2, 10).toISOString(), timeSpentSeconds: 3600, comment: 'Standup', source: 'recurring' },
     ]);
   });
 
@@ -106,7 +134,7 @@ describe('TimesheetEngineService', () => {
       { worklogId: 'w1', issueKey: 'GWP-2070', reason: 'overlap-with-recurring' },
     ]);
     expect(plan.creations).toEqual([
-      { issueKey: 'GWP-1', started: at(0, 10, 30).toISOString(), timeSpentSeconds: 3600, comment: 'Standup' },
+      { issueKey: 'GWP-1', started: at(0, 10, 30).toISOString(), timeSpentSeconds: 3600, comment: 'Standup', source: 'recurring' },
     ]);
   });
 
@@ -131,7 +159,7 @@ describe('TimesheetEngineService', () => {
       { worklogId: 'w1', issueKey: 'GWP-2070', reason: 'overlap-with-recurring' },
     ]);
     expect(plan.creations).toEqual([
-      { issueKey: 'GWP-1', started: at(0, 10, 30).toISOString(), timeSpentSeconds: 7200, comment: 'Review' },
+      { issueKey: 'GWP-1', started: at(0, 10, 30).toISOString(), timeSpentSeconds: 7200, comment: 'Review', source: 'recurring' },
     ]);
   });
 
@@ -154,7 +182,7 @@ describe('TimesheetEngineService', () => {
 
     expect(plan.deletions).toEqual([]);
     expect(plan.creations).toEqual([
-      { issueKey: 'GWP-1', started: at(0, 10).toISOString(), timeSpentSeconds: 3600, comment: 'Standup' },
+      { issueKey: 'GWP-1', started: at(0, 10).toISOString(), timeSpentSeconds: 3600, comment: 'Standup', source: 'recurring' },
     ]);
   });
 
@@ -182,10 +210,10 @@ describe('TimesheetEngineService', () => {
     expect(total).toBeLessThanOrEqual(87750);
     expect(total).toBe(87300);
     expect(allocationCreations).toEqual([
-      { issueKey: 'GWP-9', started: at(0, 12).toISOString(), timeSpentSeconds: 16200, comment: 'Allocation' },
-      { issueKey: 'GWP-9', started: at(1, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation' },
-      { issueKey: 'GWP-9', started: at(2, 11).toISOString(), timeSpentSeconds: 19800, comment: 'Allocation' },
-      { issueKey: 'GWP-9', started: at(3, 9).toISOString(), timeSpentSeconds: 24300, comment: 'Allocation' },
+      { issueKey: 'GWP-9', started: at(0, 12).toISOString(), timeSpentSeconds: 16200, comment: 'Allocation', source: 'allocated' },
+      { issueKey: 'GWP-9', started: at(1, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
+      { issueKey: 'GWP-9', started: at(2, 11).toISOString(), timeSpentSeconds: 19800, comment: 'Allocation', source: 'allocated' },
+      { issueKey: 'GWP-9', started: at(3, 9).toISOString(), timeSpentSeconds: 24300, comment: 'Allocation', source: 'allocated' },
     ]);
     expectNoOverlapWithOccupied(
       plan.creations,
@@ -202,11 +230,11 @@ describe('TimesheetEngineService', () => {
     const plan = engine.computePlan(input({ settings }));
 
     expect(plan.creations).toEqual([
-      { issueKey: 'GWP-9', started: at(0, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation' },
-      { issueKey: 'GWP-9', started: at(1, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation' },
-      { issueKey: 'GWP-9', started: at(2, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation' },
-      { issueKey: 'GWP-9', started: at(3, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation' },
-      { issueKey: 'GWP-9', started: at(4, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation' },
+      { issueKey: 'GWP-9', started: at(0, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
+      { issueKey: 'GWP-9', started: at(1, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
+      { issueKey: 'GWP-9', started: at(2, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
+      { issueKey: 'GWP-9', started: at(3, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
+      { issueKey: 'GWP-9', started: at(4, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
     ]);
     expectNoOverlaps(toSpans(plan.creations), '100% allocation');
   });
@@ -246,6 +274,7 @@ describe('TimesheetEngineService', () => {
       started: at(0, 12, 1, 30).toISOString(),
       timeSpentSeconds: 15300,
       comment: 'Allocation',
+      source: 'allocated',
     });
     const total = plan.creations.reduce((sum, creation) => sum + creation.timeSpentSeconds, 0);
     expect(total).toBe(123300);
@@ -309,7 +338,7 @@ describe('TimesheetEngineService', () => {
       ],
     });
 
-    expect(engine.computePlan(input({ settings }))).toEqual({ deletions: [], creations: [] });
+    expect(engine.computePlan(input({ settings }))).toEqual({ deletions: [], creations: [], absorb: [] });
   });
 
   it('keeps a worklog that already records a recurring event rather than re-creating it', () => {
@@ -337,6 +366,7 @@ describe('TimesheetEngineService', () => {
         started: at(1, 10).toISOString(),
         timeSpentSeconds: 900,
         comment: 'Standup',
+        source: 'recurring',
       },
     ]);
   });
@@ -396,7 +426,51 @@ describe('TimesheetEngineService', () => {
 
     expect(first.deletions.map((deletion) => deletion.worklogId)).toEqual(['w1']);
     const second = engine.computePlan(input({ settings, worklogs: synced }));
-    expect(second).toEqual({ deletions: [], creations: [] });
+    expect(second).toEqual({ deletions: [], creations: [], absorb: [] });
+  });
+
+  it('fills every free block: blocks left over by rounding go to the largest allocation', () => {
+    const settings = defaultSettings({
+      schedules: [
+        { id: 's1', issueKey: 'GWP-1', summary: 'Standup', weekdays: [1, 2, 3, 4, 5], startTime: '09:30', durationSeconds: 900, enabled: true },
+      ],
+      allocations: [
+        { id: 'a1', issueKey: 'GWP-7', summary: 'Rate limiting', percentage: 28 },
+        { id: 'a2', issueKey: 'GWP-8', summary: 'SSO login', percentage: 49 },
+        { id: 'a3', issueKey: 'GWP-9', summary: 'General', percentage: 23 },
+      ],
+    });
+
+    const plan = engine.computePlan(input({ settings }));
+
+    // 145 free blocks: 40.6, 71.05 and 33.35 round down to 40, 71 and 33, and the one left over
+    // goes to the 49% allocation.
+    const blocks = (issueKey: string) =>
+      plan.creations
+        .filter((creation) => creation.issueKey === issueKey)
+        .reduce((sum, creation) => sum + creation.timeSpentSeconds, 0) / 900;
+    expect([blocks('GWP-7'), blocks('GWP-8'), blocks('GWP-9')]).toEqual([40, 72, 33]);
+    const last = plan.creations[plan.creations.length - 1];
+    expect(new Date(new Date(last.started).getTime() + last.timeSpentSeconds * 1000)).toEqual(at(4, 16, 30));
+    expectNoOverlaps(toSpans(plan.creations), 'leftover blocks');
+  });
+
+  it('gives leftover blocks to the first of equally large allocations, and leaves unallocated time empty', () => {
+    const settings = defaultSettings({
+      workDays: [1],
+      allocations: [
+        { id: 'a1', issueKey: 'GWP-7', summary: 'First', percentage: 45 },
+        { id: 'a2', issueKey: 'GWP-8', summary: 'Second', percentage: 45 },
+      ],
+    });
+
+    const plan = engine.computePlan(input({ settings }));
+
+    // 30 blocks: 13.5 and 13.5 round down to 13 each; 90% of 30 is 27, so one block is left over.
+    expect(plan.creations.map((creation) => [creation.issueKey, creation.timeSpentSeconds / 900])).toEqual([
+      ['GWP-7', 14],
+      ['GWP-8', 13],
+    ]);
   });
 
   it('places an allocation that fits one day as a single chunk', () => {
@@ -407,7 +481,148 @@ describe('TimesheetEngineService', () => {
     const plan = engine.computePlan(input({ settings }));
 
     expect(plan.creations).toEqual([
-      { issueKey: 'GWP-9', started: at(0, 9).toISOString(), timeSpentSeconds: 13500, comment: 'Allocation' },
+      { issueKey: 'GWP-9', started: at(0, 9).toISOString(), timeSpentSeconds: 13500, comment: 'Allocation', source: 'allocated' },
     ]);
+  });
+
+  it('shares the week in proportion when the allocations add up to more than 100%', () => {
+    const settings = defaultSettings({
+      workDays: [1],
+      allocations: [
+        { id: 'a1', issueKey: 'GWP-7', summary: 'First', percentage: 100 },
+        { id: 'a2', issueKey: 'GWP-8', summary: 'Added', percentage: 50 },
+      ],
+    });
+
+    const plan = engine.computePlan(input({ settings }));
+
+    // 30 blocks shared 100:50, so the allocation added last still gets its third.
+    expect(plan.creations.map((creation) => [creation.issueKey, creation.timeSpentSeconds / 900])).toEqual([
+      ['GWP-7', 20],
+      ['GWP-8', 10],
+    ]);
+  });
+
+  it("re-plans its own worklogs when the allocations change after a sync, and keeps everyone else's", () => {
+    const settings = defaultSettings({
+      allocations: [{ id: 'a1', issueKey: 'GWP-9', summary: 'Allocation', percentage: 100 }],
+    });
+    const byHand = worklog('hand', at(1, 14), 3600, 'GWP-3');
+    const synced = applied([byHand], engine.computePlan(input({ settings, worklogs: [byHand] })));
+    expect(engine.computePlan(input({ settings, worklogs: synced }))).toEqual({ deletions: [], creations: [], absorb: [] });
+
+    const changed = defaultSettings({
+      allocations: [
+        { id: 'a1', issueKey: 'GWP-9', summary: 'Allocation', percentage: 50 },
+        { id: 'a2', issueKey: 'GWP-10', summary: 'New project', percentage: 50 },
+      ],
+    });
+    const replan = engine.computePlan(input({ settings: changed, worklogs: synced }));
+
+    // Monday and Tuesday are still GWP-9's; Wednesday is split, and Thursday and Friday move to GWP-10.
+    expect(replan.deletions.map((deletion) => deletion.reason)).toEqual(Array(3).fill('stale-generated'));
+    expect(replan.absorb).toEqual([]);
+    const after = applied(synced, replan);
+    const total = (issueKey: string) =>
+      after.filter((entry) => entry.issueKey === issueKey).reduce((sum, entry) => sum + entry.timeSpentSeconds, 0);
+    expect(after).toContainEqual(byHand);
+    expect([total('GWP-9'), total('GWP-10')]).toEqual([73 * 900, 73 * 900]);
+    expect(engine.computePlan(input({ settings: changed, worklogs: after }))).toEqual({ deletions: [], creations: [], absorb: [] });
+  });
+
+  describe('for a week with allocations filled from activity', () => {
+    const weekAllocations = {
+      '2026-09-28': [
+        { id: 'a1', issueKey: 'GWP-7', summary: 'Rate limiting', percentage: 60 },
+        { id: 'a2', issueKey: 'GWP-8', summary: 'SSO login', percentage: 40 },
+      ],
+    };
+    const usual = [{ id: 'u', issueKey: 'GWP-9', summary: 'Usual', percentage: 100 }];
+
+    it("uses the week's own allocations, and only for that week", () => {
+      const settings = defaultSettings({ allocations: usual, weekAllocations });
+      const thisWeek = engine.computePlan(input({ settings }));
+      const nextWeek = engine.computePlan(input({ settings, weekStart: new Date(2026, 9, 5) }));
+
+      const total = (issueKey: string) =>
+        thisWeek.creations
+          .filter((creation) => creation.issueKey === issueKey)
+          .reduce((sum, creation) => sum + creation.timeSpentSeconds, 0);
+      expect(total('GWP-7')).toBe(0.6 * 135000);
+      expect(total('GWP-8')).toBe(0.4 * 135000);
+      expect(total('GWP-9')).toBe(0);
+      expect(new Set(nextWeek.creations.map((creation) => creation.issueKey))).toEqual(new Set(['GWP-9']));
+    });
+
+    it("replaces the automatic worklogs and keeps leave and recorded meetings", () => {
+      const settings = defaultSettings({
+        weekAllocations: { '2026-09-28': [{ id: 'a', issueKey: 'GWP-7', summary: 'All', percentage: 100 }] },
+        leaveIssueKey: 'HR-1',
+        schedules: [
+          { id: 's', issueKey: 'GWP-1', summary: 'Standup', weekdays: [2], startTime: '09:30', durationSeconds: 900, enabled: true },
+        ],
+      });
+      const automatic = worklog('auto', at(0, 15), 900, 'GWP-5');
+      const plan = engine.computePlan(
+        input({
+          settings,
+          worklogs: [
+            automatic,
+            worklog('leave', at(4, 9), 27000, 'HR-1'),
+            worklog('standup', at(1, 9, 30), 900, 'GWP-1'),
+          ],
+        }),
+      );
+
+      expect(plan.deletions).toEqual([
+        { worklogId: 'auto', issueKey: 'GWP-5', reason: 'replaced-by-activity' },
+      ]);
+      expect(plan.absorb).toEqual([automatic]);
+      const allocated = plan.creations.reduce((sum, creation) => sum + creation.timeSpentSeconds, 0);
+      // The whole week but Friday's leave and Tuesday's standup.
+      expect(allocated).toBe(4 * 27000 - 900);
+    });
+
+    it('fills the whole week around meetings and leave, with no time lost to rounding', () => {
+      const settings = defaultSettings({
+        weekAllocations,
+        leaveIssueKey: 'HR-1',
+        schedules: [
+          { id: 's', issueKey: 'GWP-1', summary: 'Standup', weekdays: [1, 2, 3, 4, 5], startTime: '09:30', durationSeconds: 900, enabled: true },
+        ],
+      });
+      const plan = engine.computePlan(
+        input({ settings, worklogs: [worklog('leave', at(4, 9), 13500, 'HR-1')] }),
+      );
+      const logged = plan.creations.reduce((sum, creation) => sum + creation.timeSpentSeconds, 0);
+      // Every working minute but Friday morning's leave: four standups, the rest allocated.
+      expect(logged).toBe(4 * (27000 - 900) + 13500 + 4 * 900);
+      expect(plan.creations.at(-1)).toMatchObject({ started: at(4, 12, 45).toISOString(), timeSpentSeconds: 13500 });
+    });
+
+    it('plans nothing once synced, and re-plans only its own worklogs when the allocations change', () => {
+      const settings = defaultSettings({ weekAllocations });
+      const worklogs = [worklog('auto', at(0, 15), 900, 'GWP-5')];
+      const first = engine.computePlan(input({ settings, worklogs }));
+      const synced = applied(worklogs, first);
+
+      expect(engine.computePlan(input({ settings, worklogs: synced }))).toEqual({
+        deletions: [],
+        creations: [],
+        absorb: [],
+      });
+
+      const changed = defaultSettings({
+        weekAllocations: { '2026-09-28': [{ id: 'a', issueKey: 'GWP-7', summary: 'All', percentage: 100 }] },
+      });
+      const replan = engine.computePlan(input({ settings: changed, worklogs: synced }));
+      expect(new Set(replan.deletions.map((deletion) => deletion.reason))).toEqual(
+        new Set(['stale-generated']),
+      );
+      expect(replan.absorb).toEqual([]);
+      const after = applied(synced, replan);
+      expect(after.every((entry) => entry.issueKey === 'GWP-7')).toBe(true);
+      expect(after.reduce((sum, entry) => sum + entry.timeSpentSeconds, 0)).toBe(135000);
+    });
   });
 });

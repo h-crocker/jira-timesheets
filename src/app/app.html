@@ -6,7 +6,9 @@
     (nextWeek)="setWeek($event)"
   />
   <div class="actions">
-    <button type="button" data-testid="reload" [disabled]="busy()" (click)="reload()">Reload</button>
+    <button type="button" data-testid="reload" [disabled]="busy()" (click)="reload()">
+      Reload
+    </button>
     <button
       type="button"
       class="primary"
@@ -22,6 +24,9 @@
 @switch (status().kind) {
   @case ('loading') {
     <p class="status" data-testid="status">Loading worklogs…</p>
+  }
+  @case ('filling') {
+    <p class="status" data-testid="status">Reading your activity…</p>
   }
   @case ('syncing') {
     <p class="status" data-testid="status">Syncing…</p>
@@ -39,13 +44,29 @@
     <p class="summary" data-testid="plan-summary">
       Planned: {{ plan().creations.length }} to create, {{ plan().deletions.length }} to delete
     </p>
-    <app-calendar-grid [events]="derivedCalendarEvents()" [weekStart]="currentWeek()" />
+    <app-calendar-grid
+      [events]="derivedCalendarEvents()"
+      [weekStart]="currentWeek()"
+      [leaveEnabled]="leaveEnabled()"
+      [leaveDays]="leaveDays()"
+      [lockedLeaveDays]="leaveState().locked"
+      (leaveToggled)="toggleLeave($event)"
+    />
   </section>
   <aside class="sidebar">
     <app-settings-panel
       [settings]="settings()"
       [credentials]="credentials()"
+      [githubCredentials]="githubCredentials()"
+      [weekAllocations]="weekAllocations()"
+      [weekLabel]="weekLabel()"
+      [allocationEvidence]="allocationEvidence()"
+      [busy]="busy()"
+      (fillFromActivity)="fillFromActivity()"
+      (useUsualAllocations)="clearWeekAllocations()"
       (workHoursChanged)="onWorkHoursChanged($event)"
+      (activitySettingsChanged)="onActivitySettingsChanged($event)"
+      (githubCredentialsChanged)="onGithubCredentialsChanged($event)"
       (allocationAdded)="onAllocationAdded($event)"
       (allocationRemoved)="onAllocationRemoved($event)"
       (scheduleAdded)="onScheduleAdded($event)"

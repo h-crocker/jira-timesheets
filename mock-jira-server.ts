@@ -8,11 +8,17 @@ const http = require('node:http') as typeof import('node:http');
 //
 // Deliberately sends no CORS headers: Jira Cloud doesn't either, so a page served from localhost
 // can't call it directly. `npm start` relays requests through the dev server (see proxy.conf.mjs).
+// Like Jira Cloud, it also refuses writes sent with a browser's user agent ("XSRF check failed").
 
 interface MockUser {
   accountId: string;
   emailAddress: string;
   displayName: string;
+}
+
+interface EntityProperty {
+  key: string;
+  value: unknown;
 }
 
 interface StoredWorklog {
@@ -22,6 +28,7 @@ interface StoredWorklog {
   started: Date;
   timeSpentSeconds: number;
   comment?: string;
+  properties: EntityProperty[];
   created: Date;
 }
 
@@ -51,7 +58,17 @@ const DEFAULT_WORKLOG_PAGE_SIZE = 5000;
 const DEFAULT_SEARCH_PAGE_SIZE = 50;
 // Jira documents `started` as yyyy-MM-dd'T'HH:mm:ss.SSSZ, e.g. 2026-09-28T09:00:00.000+0000.
 const JIRA_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{4}$/;
+const MAX_PROPERTY_KEY_LENGTH = 255;
 const AVATAR = 'https://example.com/avatar.png';
+// Issues that exist before anyone logs work on them, with their summaries. Logging work on any other
+// key creates that issue.
+const ISSUE_SUMMARIES: Record<string, string> = {
+  'GWP-100': 'General development',
+  'GWP-1999': 'Rate limiting design',
+  'GWP-2070': 'Rate limiting for the public API',
+  'GWP-2080': 'Login fails for SSO users',
+  'HR-1': 'Annual leave',
+};
 
 let worklogIdCounter = 10001;
 let userIdCounter = 100;
@@ -59,7 +76,17 @@ const issueIds = new Map<string, string>();
 const worklogStore = new Map<string, StoredWorklog[]>();
 const usersByEmail = new Map<string, MockUser>();
 const usersById = new Map<string, MockUser>();
+// User properties by account id, then property key.
+const userProperties = new Map<string, Map<string, unknown>>();
 let activeServer: Server | null = null;
+
+function issueExists(issueKey: string): boolean {
+  return issueIds.has(issueKey) || issueKey in ISSUE_SUMMARIES;
+}
+
+function summaryOf(issueKey: string): string {
+  return ISSUE_SUMMARIES[issueKey] ?? `Summary of ${issueKey}`;
+}
 
 function issueIdFor(issueKey: string): string {
   let issueId = issueIds.get(issueKey);
@@ -133,12 +160,38 @@ function isAdfDocument(value: unknown): boolean {
   );
 }
 
+// Entity properties as Jira accepts them on a worklog: a list of { key, value } with a
+// non-empty key of at most 255 characters and any JSON value.
+function parseProperties(value: unknown): EntityProperty[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const properties: EntityProperty[] = [];
+  for (const item of value) {
+    if (item === null || typeof item !== 'object') {
+      return null;
+    }
+    const { key, value: propertyValue } = item as { key?: unknown; value?: unknown };
+    if (
+      typeof key !== 'string' ||
+      key === '' ||
+      key.length > MAX_PROPERTY_KEY_LENGTH ||
+      propertyValue === undefined
+    ) {
+      return null;
+    }
+    properties.push({ key, value: propertyValue });
+  }
+  return properties;
+}
+
 function addWorklog(
   issueKey: string,
   author: MockUser,
   started: Date,
   timeSpentSeconds: number,
   comment?: string,
+  properties: EntityProperty[] = [],
 ): StoredWorklog {
   issueIdFor(issueKey);
   const worklog: StoredWorklog = {
@@ -147,6 +200,7 @@ function addWorklog(
     authorId: author.accountId,
     started,
     timeSpentSeconds,
+    properties,
     created: new Date(),
   };
   if (comment !== undefined) {
@@ -165,6 +219,7 @@ function resetMockJira(): void {
   worklogStore.clear();
   usersByEmail.clear();
   usersById.clear();
+  userProperties.clear();
   registerUser(DEV_USER);
   registerUser(COLLEAGUE);
 
@@ -178,6 +233,11 @@ function resetMockJira(): void {
     "Colleague's pairing session",
   );
   addWorklog('GWP-2080', DEV_USER, new Date('2026-09-30T14:00:00Z'), 3600, 'Support ticket');
+  // What a Jira automation adds when an issue moves to Done: short, and in the user's name.
+  addWorklog('GWP-2080', DEV_USER, new Date('2026-09-29T15:00:00Z'), 900, 'Logged on Done');
+  addWorklog('GWP-2070', DEV_USER, new Date('2026-10-01T15:00:00Z'), 900, 'Logged on Done');
+  // A morning of leave, logged by hand.
+  addWorklog('HR-1', DEV_USER, new Date('2026-10-02T09:00:00Z'), 13500, 'Leave (morning)');
 }
 
 function renderUser(base: string, version: ApiVersion, user: MockUser): object {
@@ -193,7 +253,13 @@ function renderUser(base: string, version: ApiVersion, user: MockUser): object {
   };
 }
 
-function renderWorklog(base: string, version: ApiVersion, worklog: StoredWorklog): object {
+// Jira leaves a worklog's properties out unless the request says `expand=properties`.
+function renderWorklog(
+  base: string,
+  version: ApiVersion,
+  worklog: StoredWorklog,
+  expand: string[] = [],
+): object {
   const issueId = issueIdFor(worklog.issueKey);
   const author = renderUser(base, version, usersById.get(worklog.authorId) ?? DEV_USER);
   return {
@@ -210,6 +276,7 @@ function renderWorklog(base: string, version: ApiVersion, worklog: StoredWorklog
     timeSpentSeconds: worklog.timeSpentSeconds,
     id: worklog.id,
     issueId,
+    ...(expand.includes('properties') ? { properties: worklog.properties } : {}),
   };
 }
 
@@ -372,7 +439,7 @@ async function handleSearch(
       id: issueIdFor(key),
       self: `${base}/rest/api/3/issue/${issueIdFor(key)}`,
       key,
-      fields: wantsSummary ? { summary: `Summary of ${key}` } : {},
+      fields: wantsSummary ? { summary: summaryOf(key) } : {},
     })),
     isLast,
     ...(isLast ? {} : { nextPageToken: String(offset + pageSize) }),
@@ -391,6 +458,10 @@ async function handleWorklogs(
 ): Promise<void> {
   const method = req.method ?? 'GET';
   const worklogs = worklogStore.get(issueKey) ?? [];
+  const expand = url.searchParams
+    .getAll('expand')
+    .flatMap((value) => value.split(','))
+    .map((value) => value.trim());
 
   if (method === 'GET' && worklogId === undefined) {
     const startedAfter = parseNonNegativeInt(url.searchParams.get('startedAfter'));
@@ -409,7 +480,7 @@ async function handleWorklogs(
       total: matching.length,
       worklogs: matching
         .slice(startAt, startAt + maxResults)
-        .map((worklog) => renderWorklog(base, version, worklog)),
+        .map((worklog) => renderWorklog(base, version, worklog, expand)),
     });
     return;
   }
@@ -447,6 +518,10 @@ async function handleWorklogs(
           version === '3' ? 'Must be an Atlassian Document Format document' : 'Must be a string';
       }
     }
+    const properties = body['properties'] === undefined ? [] : parseProperties(body['properties']);
+    if (properties === null) {
+      errors['properties'] = 'Must be a list of properties, each with a key and a value';
+    }
     if (Object.keys(errors).length > 0) {
       sendErrors(res, 400, [], errors);
       return;
@@ -457,8 +532,9 @@ async function handleWorklogs(
       new Date(started as string),
       timeSpentSeconds as number,
       text,
+      properties as EntityProperty[],
     );
-    sendJson(res, 201, renderWorklog(base, version, created));
+    sendJson(res, 201, renderWorklog(base, version, created, expand));
     return;
   }
 
@@ -469,7 +545,7 @@ async function handleWorklogs(
   }
 
   if (method === 'GET') {
-    sendJson(res, 200, renderWorklog(base, version, worklogs[index]));
+    sendJson(res, 200, renderWorklog(base, version, worklogs[index], expand));
     return;
   }
 
@@ -488,12 +564,90 @@ async function handleWorklogs(
   sendErrors(res, 404, ['Not found']);
 }
 
+// An issue with just the fields asked for; 404 for keys that don't exist, as Jira does.
+function handleIssue(res: ServerResponse, url: URL, base: string, issueKey: string): void {
+  if (!issueExists(issueKey)) {
+    sendErrors(res, 404, ['Issue does not exist or you do not have permission to see it.']);
+    return;
+  }
+  const fields = url.searchParams.getAll('fields').flatMap((value) => value.split(','));
+  sendJson(res, 200, {
+    expand: '',
+    id: issueIdFor(issueKey),
+    self: `${base}/rest/api/3/issue/${issueIdFor(issueKey)}`,
+    key: issueKey,
+    fields: fields.includes('summary') ? { summary: summaryOf(issueKey) } : {},
+  });
+}
+
+// The keys of the caller's user properties.
+function handleUserPropertyKeys(res: ServerResponse, url: URL, base: string, me: MockUser): void {
+  const accountId = url.searchParams.get('accountId') ?? me.accountId;
+  if (accountId !== me.accountId) {
+    sendErrors(res, 403, ['You do not have permission to access this user property.']);
+    return;
+  }
+  const keys = [...(userProperties.get(accountId)?.keys() ?? [])];
+  sendJson(res, 200, {
+    keys: keys.map((key) => ({
+      key,
+      self: `${base}/rest/api/3/user/properties/${encodeURIComponent(key)}?accountId=${accountId}`,
+    })),
+  });
+}
+
+// User properties: callers may read and write only their own.
+async function handleUserProperty(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  me: MockUser,
+  propertyKey: string,
+): Promise<void> {
+  const accountId = url.searchParams.get('accountId') ?? me.accountId;
+  if (accountId !== me.accountId) {
+    sendErrors(res, 403, ['You do not have permission to access this user property.']);
+    return;
+  }
+  const properties = userProperties.get(accountId) ?? new Map<string, unknown>();
+  userProperties.set(accountId, properties);
+  if (req.method === 'GET') {
+    if (!properties.has(propertyKey)) {
+      sendErrors(res, 404, [`The property with key '${propertyKey}' does not exist.`]);
+      return;
+    }
+    sendJson(res, 200, { key: propertyKey, value: properties.get(propertyKey) });
+    return;
+  }
+  if (req.method === 'PUT') {
+    let value: unknown;
+    try {
+      value = JSON.parse(await readBody(req));
+    } catch {
+      sendErrors(res, 400, ['The property value must be valid JSON.']);
+      return;
+    }
+    const existed = properties.has(propertyKey);
+    properties.set(propertyKey, value);
+    res.writeHead(existed ? 200 : 201);
+    res.end();
+    return;
+  }
+  sendErrors(res, 404, ['Not found']);
+}
+
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const base = `http://${req.headers.host ?? 'localhost'}`;
   const url = new URL(req.url ?? '/', base);
   const me = authenticate(req);
   if (me === null) {
     sendErrors(res, 401, ['Client must be authenticated to access this resource.']);
+    return;
+  }
+  // Jira Cloud refuses a write whose user agent is a browser's, even with the no-check token.
+  if (req.method !== 'GET' && /^Mozilla\//.test(req.headers['user-agent'] ?? '')) {
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    res.end('XSRF check failed');
     return;
   }
 
@@ -508,6 +662,23 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     (req.method === 'GET' || req.method === 'POST')
   ) {
     await handleSearch(req, res, url, base, me);
+    return;
+  }
+
+  const issue = url.pathname.match(/^\/rest\/api\/[23]\/issue\/([^/]+)$/);
+  if (issue !== null && req.method === 'GET') {
+    handleIssue(res, url, base, decodeURIComponent(issue[1]));
+    return;
+  }
+
+  if (/^\/rest\/api\/[23]\/user\/properties$/.test(url.pathname) && req.method === 'GET') {
+    handleUserPropertyKeys(res, url, base, me);
+    return;
+  }
+
+  const userProperty = url.pathname.match(/^\/rest\/api\/[23]\/user\/properties\/([^/]+)$/);
+  if (userProperty !== null) {
+    await handleUserProperty(req, res, url, me, decodeURIComponent(userProperty[1]));
     return;
   }
 

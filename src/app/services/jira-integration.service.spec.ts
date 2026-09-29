@@ -40,8 +40,11 @@ describe('JiraIntegrationService', () => {
     const mine = await service().fetchMyWorklogs(MONDAY, NEXT_MONDAY);
     expect(mine.map((worklog) => `${worklog.issueKey} ${worklog.comment}`).sort()).toEqual([
       'GWP-2070 Code review',
+      'GWP-2070 Logged on Done',
       'GWP-2070 Work on feature',
+      'GWP-2080 Logged on Done',
       'GWP-2080 Support ticket',
+      'HR-1 Leave (morning)',
     ]);
 
     const theirs = await service('colleague@example.com').fetchMyWorklogs(MONDAY, NEXT_MONDAY);
@@ -74,6 +77,67 @@ describe('JiraIntegrationService', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('marks the worklogs it creates, and reads the mark back', async () => {
+    const requests: Array<{ url: string; body: string }> = [];
+    const realFetch = globalThis.fetch;
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (init?.method === 'POST') {
+        requests.push({ url: String(input), body: String(init.body) });
+      }
+      return realFetch(input, init);
+    });
+    const created = await service()
+      .createWorklog('GWP-3000', '2026-10-01T13:15:00.000Z', 900, 'Plan')
+      .finally(() => spy.mockRestore());
+    expect(created.generated).toBe(true);
+    expect(requests[0].url).toContain('/rest/api/3/issue/GWP-3000/worklog');
+    expect(JSON.parse(requests[0].body).properties).toEqual([
+      { key: 'jira-timesheets', value: { generated: true, version: 1 } },
+    ]);
+
+    const worklogs = await service().fetchMyWorklogs(MONDAY, NEXT_MONDAY);
+    expect(worklogs.filter((worklog) => worklog.generated).map((worklog) => worklog.id)).toEqual([
+      created.id,
+    ]);
+    // The seeded worklogs were logged some other way.
+    expect(worklogs.filter((worklog) => !worklog.generated)).toHaveLength(6);
+  });
+
+  it('remembers the worklogs it replaced, per week, merging what it adds', async () => {
+    const jira = service();
+    expect(await jira.fetchReplaced(MONDAY)).toEqual([]);
+
+    const first = {
+      id: '1',
+      issueKey: 'GWP-2080',
+      started: new Date('2026-09-29T15:00:00Z'),
+      timeSpentSeconds: 900,
+      comment: 'Logged on Done',
+      generated: false,
+    };
+    const { comment: _, ...second } = { ...first, id: '2' };
+    await jira.saveReplaced(MONDAY, [first]);
+    await jira.saveReplaced(MONDAY, [first, second]);
+
+    expect(await jira.fetchReplaced(MONDAY)).toEqual([first, second]);
+    expect(await jira.fetchReplaced(NEXT_MONDAY)).toEqual([]);
+    // Another user's copies are their own.
+    expect(await service('colleague@example.com').fetchReplaced(MONDAY)).toEqual([]);
+  });
+
+  it('looks up the summaries of issues that exist, leaving out keys Jira does not know', async () => {
+    const summaries = await service().fetchIssueSummaries([
+      'GWP-2070',
+      'UTF-8',
+      'GWP-2070',
+      'HR-1',
+    ]);
+    expect([...summaries]).toEqual([
+      ['GWP-2070', 'Rate limiting for the public API'],
+      ['HR-1', 'Annual leave'],
+    ]);
   });
 
   it('reads Atlassian Document Format comments as plain text', async () => {

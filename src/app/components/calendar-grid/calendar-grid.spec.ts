@@ -67,4 +67,30 @@ describe('CalendarGridComponent', () => {
     fixture.detectChanges();
     expect(root(fixture).querySelectorAll('.event-row').length).toBe(1);
   });
+
+  it('shows worklogs about to be deleted struck through', () => {
+    const el = root(create([{ ...event('gone', 0, 9, 1, 'jira'), pendingDeletion: true }]));
+    const row = el.querySelector('[data-testid="event-gone"]')!;
+    expect(row.classList).toContain('pending-deletion');
+    expect(row.getAttribute('data-pending-deletion')).toBe('true');
+  });
+
+  it('offers leave ticks only when leave can be logged', () => {
+    const fixture = create([]);
+    expect(root(fixture).querySelector('[data-testid="leave-1"]')).toBeNull();
+
+    fixture.componentRef.setInput('leaveEnabled', true);
+    fixture.componentRef.setInput('leaveDays', [2]);
+    fixture.componentRef.setInput('lockedLeaveDays', [5]);
+    fixture.detectChanges();
+    const tick = (weekday: number) =>
+      root(fixture).querySelector<HTMLInputElement>(`[data-testid="leave-${weekday}"]`)!;
+    expect([1, 2, 3, 4, 5].map((weekday) => tick(weekday).checked)).toEqual([false, true, false, false, true]);
+    expect(tick(5).disabled).toBe(true);
+
+    const toggled: number[] = [];
+    fixture.componentInstance.leaveToggled.subscribe((weekday) => toggled.push(weekday));
+    tick(3).click();
+    expect(toggled).toEqual([3]);
+  });
 });

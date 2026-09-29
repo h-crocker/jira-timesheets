@@ -10,6 +10,10 @@ const SETTINGS: UserSettings = {
   schedules: [
     { id: 's1', issueKey: 'GWP-1', summary: 'Standup', weekdays: [1, 3], startTime: '09:30', durationSeconds: 900, enabled: true },
   ],
+  weekAllocations: {},
+  leaveIssueKey: '',
+  placeholderIssueKey: '',
+  githubOrgs: [],
 };
 
 describe('SettingsPanelComponent', () => {
@@ -126,5 +130,102 @@ describe('SettingsPanelComponent', () => {
     q(fixture, 'clear-credentials').click();
 
     expect(emitted).toEqual([{ email: 'a@b.c', apiToken: 'new-token', host: 'https://x.atlassian.net' }, null]);
+  });
+
+  it('emits the activity settings', () => {
+    const fixture = create({ ...SETTINGS, githubOrgs: ['acme'] });
+    const emitted: unknown[] = [];
+    fixture.componentInstance.activitySettingsChanged.subscribe((v) => emitted.push(v));
+
+    expect(q<HTMLInputElement>(fixture, 'github-orgs').value).toBe('acme');
+    type(q<HTMLInputElement>(fixture, 'leave-issue-key'), ' HR-1 ');
+    type(q<HTMLInputElement>(fixture, 'placeholder-issue-key'), 'GWP-100');
+    type(q<HTMLInputElement>(fixture, 'github-orgs'), 'acme, widgets  ');
+    q(fixture, 'save-activity-settings').click();
+
+    expect(emitted).toEqual([
+      {
+        leaveIssueKey: 'HR-1',
+        placeholderIssueKey: 'GWP-100',
+        githubOrgs: ['acme', 'widgets'],
+      },
+    ]);
+  });
+
+  it('emits the GitHub token, defaulting the API URL, and clears it', () => {
+    const fixture = create();
+    const emitted: unknown[] = [];
+    fixture.componentInstance.githubCredentialsChanged.subscribe((v) => emitted.push(v));
+
+    type(q<HTMLInputElement>(fixture, 'github-token'), 'gh-token');
+    q(fixture, 'github-form').dispatchEvent(new Event('submit', { cancelable: true }));
+    q(fixture, 'clear-github').click();
+
+    expect(emitted).toEqual([{ token: 'gh-token', apiUrl: 'https://api.github.com' }, null]);
+  });
+
+  it("shows the week's own allocations, with what each came from, in place of the usual ones", () => {
+    const fixture = create();
+    fixture.componentRef.setInput('weekLabel', 'Sep 28 – Oct 4');
+    fixture.detectChanges();
+    expect(q(fixture, 'allocations-scope').textContent).toContain('Your usual allocations');
+    expect(q(fixture, 'allocation-a1').textContent).toContain('GWP-2070');
+    expect(q(fixture, 'fill-from-activity').textContent).toContain('Fill Sep 28 – Oct 4 from activity');
+    expect(q(fixture, 'use-usual-allocations')).toBeNull();
+
+    fixture.componentRef.setInput('weekAllocations', [
+      { id: 'activity-GWP-8', issueKey: 'GWP-8', summary: 'SSO login', percentage: 100 },
+    ]);
+    fixture.componentRef.setInput('allocationEvidence', { 'GWP-8': 'acme/web#52 (2 actions)' });
+    fixture.detectChanges();
+
+    expect(q(fixture, 'allocations-scope').textContent).toContain('For Sep 28 – Oct 4 only');
+    expect(q(fixture, 'allocation-a1')).toBeNull();
+    const row = q(fixture, 'allocation-activity-GWP-8');
+    expect(row.textContent).toContain('100%');
+    expect(row.querySelector('[data-testid="allocation-evidence"]')!.textContent).toBe(
+      'acme/web#52 (2 actions)',
+    );
+  });
+
+  it("says what the allocations add up to when it isn't 100%", () => {
+    const fixture = create();
+    expect(q(fixture, 'allocations-total').textContent).toContain(
+      'These add up to 75%, so part of the week is left empty.',
+    );
+
+    fixture.componentRef.setInput('weekAllocations', [
+      { id: 'b1', issueKey: 'GWP-7', summary: 'Filled', percentage: 100 },
+      { id: 'b2', issueKey: 'GWP-8', summary: 'Added', percentage: 20 },
+    ]);
+    fixture.detectChanges();
+    expect(q(fixture, 'allocations-total').textContent).toContain(
+      'These add up to 120%, so each gets its share of the week in proportion.',
+    );
+
+    fixture.componentRef.setInput('weekAllocations', [
+      { id: 'c1', issueKey: 'GWP-7', summary: 'Third', percentage: 33.3 },
+      { id: 'c2', issueKey: 'GWP-8', summary: 'Third', percentage: 33.3 },
+      { id: 'c3', issueKey: 'GWP-9', summary: 'Third', percentage: 33.4 },
+    ]);
+    fixture.detectChanges();
+    expect(q(fixture, 'allocations-total')).toBeNull();
+  });
+
+  it('emits fillFromActivity and useUsualAllocations, and disables filling while busy', () => {
+    const fixture = create();
+    fixture.componentRef.setInput('weekAllocations', []);
+    fixture.detectChanges();
+    const events: string[] = [];
+    fixture.componentInstance.fillFromActivity.subscribe(() => events.push('fill'));
+    fixture.componentInstance.useUsualAllocations.subscribe(() => events.push('usual'));
+
+    q(fixture, 'fill-from-activity').click();
+    q(fixture, 'use-usual-allocations').click();
+    expect(events).toEqual(['fill', 'usual']);
+
+    fixture.componentRef.setInput('busy', true);
+    fixture.detectChanges();
+    expect(q<HTMLButtonElement>(fixture, 'fill-from-activity').disabled).toBe(true);
   });
 });

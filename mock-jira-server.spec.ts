@@ -1,7 +1,10 @@
 import * as http from 'node:http';
 import {
   DashboardUserSchema,
+  EntityPropertySchema,
+  IssueSchema,
   PageOfWorklogsSchema,
+  PropertyKeysSchema,
   SearchAndReconcileResultsSchema,
   WorklogSchema,
 } from 'jira.js/cloud';
@@ -45,7 +48,7 @@ describe('mock Jira server', () => {
     expect(response.headers.get('content-type')).toBe('application/json');
     expect(PageOfWorklogsSchema.safeParse(body).error).toBeUndefined();
 
-    expect(body.total).toBe(3);
+    expect(body.total).toBe(4);
     const devWorklog = body.worklogs.find(
       (worklog: { started: string }) => worklog.started === '2026-09-28T09:00:00.000+0000',
     );
@@ -137,6 +140,60 @@ describe('mock Jira server', () => {
     expect((await accepted.json()).comment.content[0].content[0].text).toBe('ADF');
   });
 
+  it('stores worklog properties and returns them only when expanded', async () => {
+    const properties = [{ key: 'jira-timesheets', value: { generated: true, version: 1 } }];
+    const response = await fetch(`${base}/rest/api/3/issue/GWP-2070/worklog?expand=properties`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        started: '2026-09-30T09:00:00.000+0000',
+        timeSpentSeconds: 900,
+        properties,
+      }),
+    });
+    expect(response.status).toBe(201);
+    const created = await response.json();
+    expect(WorklogSchema.safeParse(created).error).toBeUndefined();
+    expect(created.properties).toEqual(properties);
+
+    const plain = await getJson(`/rest/api/3/issue/GWP-2070/worklog/${created.id}`);
+    expect(plain.body).not.toHaveProperty('properties');
+
+    const page = await getJson('/rest/api/3/issue/GWP-2070/worklog?expand=properties');
+    expect(PageOfWorklogsSchema.safeParse(page.body).error).toBeUndefined();
+    const byId = new Map(
+      page.body.worklogs.map((worklog: { id: string; properties: unknown }) => [
+        worklog.id,
+        worklog.properties,
+      ]),
+    );
+    expect(byId.get(created.id)).toEqual(properties);
+    expect(
+      [...byId.values()].filter((value) => Array.isArray(value) && value.length === 0),
+    ).toHaveLength(4);
+  });
+
+  it('POST rejects properties without a key or a value', async () => {
+    for (const properties of [
+      { key: 'x', value: 1 },
+      [{ value: 1 }],
+      [{ key: '', value: 1 }],
+      [{ key: 'x' }],
+    ]) {
+      const response = await fetch(`${base}/rest/api/3/issue/GWP-2070/worklog`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          started: '2026-09-30T09:00:00.000+0000',
+          timeSpentSeconds: 900,
+          properties,
+        }),
+      });
+      expect(response.status, JSON.stringify(properties)).toBe(400);
+      expect(Object.keys((await response.json()).errors)).toEqual(['properties']);
+    }
+  });
+
   it('POST with an invalid body returns 400 with Jira-style errors', async () => {
     const response = await fetch(`${base}/rest/api/2/issue/GWP-2070/worklog`, {
       method: 'POST',
@@ -202,6 +259,7 @@ describe('mock Jira server', () => {
     expect(dev.body.issues.map((issue: { key: string }) => issue.key)).toEqual([
       'GWP-2070',
       'GWP-2080',
+      'HR-1',
     ]);
     expect(dev.body.isLast).toBe(true);
 
@@ -227,10 +285,46 @@ describe('mock Jira server', () => {
       `/rest/api/3/search/jql?jql=worklogAuthor%3DcurrentUser()&maxResults=1&nextPageToken=${first.nextPageToken}`,
     );
     expect(second.body.issues.map((issue: { key: string }) => issue.key)).toEqual(['GWP-2080']);
-    expect(second.body.isLast).toBe(true);
+    expect(second.body.isLast).toBe(false);
 
     expect((await getJson('/rest/api/3/search/jql?jql=project%20%3D%20GWP')).response.status).toBe(
       400,
+    );
+  });
+
+  it('GET issue returns the fields asked for, and 404 for keys that do not exist', async () => {
+    const { response, body } = await getJson('/rest/api/3/issue/GWP-2070?fields=summary');
+    expect(response.status).toBe(200);
+    expect(IssueSchema.safeParse(body).error).toBeUndefined();
+    expect(body).toMatchObject({
+      key: 'GWP-2070',
+      fields: { summary: 'Rate limiting for the public API' },
+    });
+    expect((await getJson('/rest/api/3/issue/NOPE-1?fields=summary')).response.status).toBe(404);
+  });
+
+  it('stores user properties for the caller only', async () => {
+    const path =
+      '/rest/api/3/user/properties/jira-timesheets.test?accountId=5d1f0f3c8e1a2b0c7a9d0001';
+    expect((await getJson(path)).response.status).toBe(404);
+
+    const put = (value: unknown, headers = JSON_HEADERS) =>
+      fetch(`${base}${path}`, { method: 'PUT', headers, body: JSON.stringify(value) });
+    expect((await put({ n: 1 })).status).toBe(201);
+    expect((await put({ n: 2 })).status).toBe(200);
+    const { response, body } = await getJson(path);
+    expect(response.status).toBe(200);
+    expect(EntityPropertySchema.safeParse(body).error).toBeUndefined();
+    expect(body).toEqual({ key: 'jira-timesheets.test', value: { n: 2 } });
+
+    const keys = await getJson('/rest/api/3/user/properties?accountId=5d1f0f3c8e1a2b0c7a9d0001');
+    expect(PropertyKeysSchema.safeParse(keys.body).error).toBeUndefined();
+    expect(keys.body.keys.map((entry: { key: string }) => entry.key)).toEqual([
+      'jira-timesheets.test',
+    ]);
+
+    expect((await put({ n: 3 }, { ...COLLEAGUE, 'Content-Type': 'application/json' })).status).toBe(
+      403,
     );
   });
 
@@ -244,6 +338,25 @@ describe('mock Jira server', () => {
       headers: { Origin: 'http://localhost:4200' },
     });
     expect(get.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('refuses writes with a browser user agent, even with the no-check token, like Jira Cloud', async () => {
+    const post = (userAgent: string) =>
+      fetch(`${base}/rest/api/3/issue/GWP-2070/worklog`, {
+        method: 'POST',
+        headers: { ...JSON_HEADERS, 'User-Agent': userAgent, 'X-Atlassian-Token': 'no-check' },
+        body: JSON.stringify({ started: '2026-09-30T09:00:00.000+0000', timeSpentSeconds: 900 }),
+      });
+    const browser = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/141.0 Safari/537.36';
+
+    const refused = await post(browser);
+    expect(refused.status).toBe(403);
+    expect(await refused.text()).toBe('XSRF check failed');
+    expect((await post('jira-timesheets-relay')).status).toBe(201);
+    const read = await fetch(`${base}/rest/api/3/issue/GWP-2070/worklog`, {
+      headers: { ...DEV, 'User-Agent': browser },
+    });
+    expect(read.status).toBe(200);
   });
 
   it('unknown routes return 404', async () => {
