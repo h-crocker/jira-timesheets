@@ -67,7 +67,6 @@ export class App {
   readonly derivedCalendarEvents = computed<CalendarEvent[]>(() => {
     const weekStart = this.currentWeek();
     const weekEnd = addDays(weekStart, 7);
-    const settings = this.settings();
     const plan = this.plan();
 
     const deleted = new Set(plan.deletions.map((deletion) => deletion.worklogId));
@@ -86,15 +85,6 @@ export class App {
         worklogId: worklog.id,
       }));
 
-    const recurringOnly = this.engine.computePlan({
-      weekStart,
-      settings: { ...settings, allocations: [] },
-      worklogs: this.worklogs(),
-    });
-    const recurringKeys = new Set(
-      recurringOnly.creations.map((creation) => `${creation.issueKey}|${creation.started}`),
-    );
-
     const planned: CalendarEvent[] = plan.creations.map((creation, index) => {
       const start = new Date(creation.started);
       return {
@@ -104,9 +94,7 @@ export class App {
         start,
         end: new Date(start.getTime() + creation.timeSpentSeconds * 1000),
         timeSpentSeconds: creation.timeSpentSeconds,
-        source: recurringKeys.has(`${creation.issueKey}|${creation.started}`)
-          ? ('recurring' as const)
-          : ('allocated' as const),
+        source: creation.source,
       };
     });
 

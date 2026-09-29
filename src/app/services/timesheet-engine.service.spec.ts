@@ -24,7 +24,7 @@ function defaultSettings(overrides: Partial<UserSettings> = {}): UserSettings {
 }
 
 function worklog(id: string, started: Date, timeSpentSeconds: number, issueKey = 'GWP-2070'): JiraWorklog {
-  return { id, issueKey, started, timeSpentSeconds };
+  return { id, issueKey, started, timeSpentSeconds, generated: false };
 }
 
 function input(overrides: Partial<EngineInput> = {}): EngineInput {
@@ -80,8 +80,8 @@ describe('TimesheetEngineService', () => {
 
     expect(plan.deletions).toEqual([]);
     expect(plan.creations).toEqual([
-      { issueKey: 'GWP-1', started: at(0, 10).toISOString(), timeSpentSeconds: 3600, comment: 'Standup' },
-      { issueKey: 'GWP-1', started: at(2, 10).toISOString(), timeSpentSeconds: 3600, comment: 'Standup' },
+      { issueKey: 'GWP-1', started: at(0, 10).toISOString(), timeSpentSeconds: 3600, comment: 'Standup', source: 'recurring' },
+      { issueKey: 'GWP-1', started: at(2, 10).toISOString(), timeSpentSeconds: 3600, comment: 'Standup', source: 'recurring' },
     ]);
   });
 
@@ -106,7 +106,7 @@ describe('TimesheetEngineService', () => {
       { worklogId: 'w1', issueKey: 'GWP-2070', reason: 'overlap-with-recurring' },
     ]);
     expect(plan.creations).toEqual([
-      { issueKey: 'GWP-1', started: at(0, 10, 30).toISOString(), timeSpentSeconds: 3600, comment: 'Standup' },
+      { issueKey: 'GWP-1', started: at(0, 10, 30).toISOString(), timeSpentSeconds: 3600, comment: 'Standup', source: 'recurring' },
     ]);
   });
 
@@ -131,7 +131,7 @@ describe('TimesheetEngineService', () => {
       { worklogId: 'w1', issueKey: 'GWP-2070', reason: 'overlap-with-recurring' },
     ]);
     expect(plan.creations).toEqual([
-      { issueKey: 'GWP-1', started: at(0, 10, 30).toISOString(), timeSpentSeconds: 7200, comment: 'Review' },
+      { issueKey: 'GWP-1', started: at(0, 10, 30).toISOString(), timeSpentSeconds: 7200, comment: 'Review', source: 'recurring' },
     ]);
   });
 
@@ -154,7 +154,7 @@ describe('TimesheetEngineService', () => {
 
     expect(plan.deletions).toEqual([]);
     expect(plan.creations).toEqual([
-      { issueKey: 'GWP-1', started: at(0, 10).toISOString(), timeSpentSeconds: 3600, comment: 'Standup' },
+      { issueKey: 'GWP-1', started: at(0, 10).toISOString(), timeSpentSeconds: 3600, comment: 'Standup', source: 'recurring' },
     ]);
   });
 
@@ -182,10 +182,10 @@ describe('TimesheetEngineService', () => {
     expect(total).toBeLessThanOrEqual(87750);
     expect(total).toBe(87300);
     expect(allocationCreations).toEqual([
-      { issueKey: 'GWP-9', started: at(0, 12).toISOString(), timeSpentSeconds: 16200, comment: 'Allocation' },
-      { issueKey: 'GWP-9', started: at(1, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation' },
-      { issueKey: 'GWP-9', started: at(2, 11).toISOString(), timeSpentSeconds: 19800, comment: 'Allocation' },
-      { issueKey: 'GWP-9', started: at(3, 9).toISOString(), timeSpentSeconds: 24300, comment: 'Allocation' },
+      { issueKey: 'GWP-9', started: at(0, 12).toISOString(), timeSpentSeconds: 16200, comment: 'Allocation', source: 'allocated' },
+      { issueKey: 'GWP-9', started: at(1, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
+      { issueKey: 'GWP-9', started: at(2, 11).toISOString(), timeSpentSeconds: 19800, comment: 'Allocation', source: 'allocated' },
+      { issueKey: 'GWP-9', started: at(3, 9).toISOString(), timeSpentSeconds: 24300, comment: 'Allocation', source: 'allocated' },
     ]);
     expectNoOverlapWithOccupied(
       plan.creations,
@@ -202,11 +202,11 @@ describe('TimesheetEngineService', () => {
     const plan = engine.computePlan(input({ settings }));
 
     expect(plan.creations).toEqual([
-      { issueKey: 'GWP-9', started: at(0, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation' },
-      { issueKey: 'GWP-9', started: at(1, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation' },
-      { issueKey: 'GWP-9', started: at(2, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation' },
-      { issueKey: 'GWP-9', started: at(3, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation' },
-      { issueKey: 'GWP-9', started: at(4, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation' },
+      { issueKey: 'GWP-9', started: at(0, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
+      { issueKey: 'GWP-9', started: at(1, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
+      { issueKey: 'GWP-9', started: at(2, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
+      { issueKey: 'GWP-9', started: at(3, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
+      { issueKey: 'GWP-9', started: at(4, 9).toISOString(), timeSpentSeconds: 27000, comment: 'Allocation', source: 'allocated' },
     ]);
     expectNoOverlaps(toSpans(plan.creations), '100% allocation');
   });
@@ -246,6 +246,7 @@ describe('TimesheetEngineService', () => {
       started: at(0, 12, 1, 30).toISOString(),
       timeSpentSeconds: 15300,
       comment: 'Allocation',
+      source: 'allocated',
     });
     const total = plan.creations.reduce((sum, creation) => sum + creation.timeSpentSeconds, 0);
     expect(total).toBe(123300);
@@ -337,6 +338,7 @@ describe('TimesheetEngineService', () => {
         started: at(1, 10).toISOString(),
         timeSpentSeconds: 900,
         comment: 'Standup',
+        source: 'recurring',
       },
     ]);
   });
@@ -407,7 +409,7 @@ describe('TimesheetEngineService', () => {
     const plan = engine.computePlan(input({ settings }));
 
     expect(plan.creations).toEqual([
-      { issueKey: 'GWP-9', started: at(0, 9).toISOString(), timeSpentSeconds: 13500, comment: 'Allocation' },
+      { issueKey: 'GWP-9', started: at(0, 9).toISOString(), timeSpentSeconds: 13500, comment: 'Allocation', source: 'allocated' },
     ]);
   });
 });

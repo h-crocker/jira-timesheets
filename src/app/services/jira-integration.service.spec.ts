@@ -76,6 +76,32 @@ describe('JiraIntegrationService', () => {
     }
   });
 
+  it('marks the worklogs it creates, and reads the mark back', async () => {
+    const requests: Array<{ url: string; body: string }> = [];
+    const realFetch = globalThis.fetch;
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (init?.method === 'POST') {
+        requests.push({ url: String(input), body: String(init.body) });
+      }
+      return realFetch(input, init);
+    });
+    const created = await service()
+      .createWorklog('GWP-3000', '2026-10-01T13:15:00.000Z', 900, 'Plan')
+      .finally(() => spy.mockRestore());
+    expect(created.generated).toBe(true);
+    expect(requests[0].url).toContain('/rest/api/3/issue/GWP-3000/worklog');
+    expect(JSON.parse(requests[0].body).properties).toEqual([
+      { key: 'jira-timesheets', value: { generated: true, version: 1 } },
+    ]);
+
+    const worklogs = await service().fetchMyWorklogs(MONDAY, NEXT_MONDAY);
+    expect(worklogs.filter((worklog) => worklog.generated).map((worklog) => worklog.id)).toEqual([
+      created.id,
+    ]);
+    // The seeded worklogs were logged some other way.
+    expect(worklogs.filter((worklog) => !worklog.generated)).toHaveLength(3);
+  });
+
   it('reads Atlassian Document Format comments as plain text', async () => {
     await fetch(`${host}/rest/api/3/issue/GWP-3000/worklog`, {
       method: 'POST',

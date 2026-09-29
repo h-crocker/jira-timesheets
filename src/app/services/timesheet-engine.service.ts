@@ -141,6 +141,7 @@ export class TimesheetEngineService {
       started: event.start.toISOString(),
       timeSpentSeconds: event.timeSpentSeconds,
       comment: event.summary,
+      source: 'recurring',
     }));
 
     const totalWeekCapacitySeconds = settings.workDays.length * settings.hoursPerDay * 3600;
@@ -184,6 +185,7 @@ export class TimesheetEngineService {
               started: chunkStart.toISOString(),
               timeSpentSeconds: rounded,
               comment: allocation.summary,
+              source: 'allocated',
             });
             occupied.push({ start: chunkStart, end: new Date(chunkStart.getTime() + rounded * 1000) });
             allocationRemaining -= rounded;

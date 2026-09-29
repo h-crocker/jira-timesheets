@@ -46,9 +46,11 @@ npm run build
   (deletions + creations); recurring events win over clashing worklogs, allocations fill the rest, and a
   worklog that already records a recurring event is left alone, so syncing twice changes nothing.
 - `SettingsService` / `JiraIntegrationService`: `localStorage` persistence and the `jira.js` client, routed
-  through the dev-server relay in the running app.
+  through the dev-server relay in the running app. Every worklog the app creates carries a
+  `jira-timesheets` worklog property, so it can tell its own worklogs from ones logged by hand or added
+  automatically by Jira.
 - Display components (`week-selector`, `settings-panel`, `calendar-grid`) use only signal inputs and
   outputs, with no dependency injection. `App` is the single smart component.
 - `mock-jira-server.ts` mirrors Jira Cloud where the app depends on it: v3 comments in Atlassian Document
-  Format, account IDs, Jira's `started` date format, per-user worklogs, the JQL the app sends, and no
-  CORS headers. Its tests check its responses against `jira.js`'s own schemas.
+  Format, account IDs, Jira's `started` date format, per-user worklogs, worklog properties (returned only
+  with `expand=properties`), the JQL the app sends, and no CORS headers. Its tests check its responses against `jira.js`'s own schemas.

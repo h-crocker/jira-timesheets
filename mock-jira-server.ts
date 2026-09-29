@@ -15,6 +15,11 @@ interface MockUser {
   displayName: string;
 }
 
+interface EntityProperty {
+  key: string;
+  value: unknown;
+}
+
 interface StoredWorklog {
   id: string;
   issueKey: string;
@@ -22,6 +27,7 @@ interface StoredWorklog {
   started: Date;
   timeSpentSeconds: number;
   comment?: string;
+  properties: EntityProperty[];
   created: Date;
 }
 
@@ -51,6 +57,7 @@ const DEFAULT_WORKLOG_PAGE_SIZE = 5000;
 const DEFAULT_SEARCH_PAGE_SIZE = 50;
 // Jira documents `started` as yyyy-MM-dd'T'HH:mm:ss.SSSZ, e.g. 2026-09-28T09:00:00.000+0000.
 const JIRA_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{4}$/;
+const MAX_PROPERTY_KEY_LENGTH = 255;
 const AVATAR = 'https://example.com/avatar.png';
 
 let worklogIdCounter = 10001;
@@ -133,12 +140,38 @@ function isAdfDocument(value: unknown): boolean {
   );
 }
 
+// Entity properties as Jira accepts them on a worklog: a list of { key, value } with a
+// non-empty key of at most 255 characters and any JSON value.
+function parseProperties(value: unknown): EntityProperty[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const properties: EntityProperty[] = [];
+  for (const item of value) {
+    if (item === null || typeof item !== 'object') {
+      return null;
+    }
+    const { key, value: propertyValue } = item as { key?: unknown; value?: unknown };
+    if (
+      typeof key !== 'string' ||
+      key === '' ||
+      key.length > MAX_PROPERTY_KEY_LENGTH ||
+      propertyValue === undefined
+    ) {
+      return null;
+    }
+    properties.push({ key, value: propertyValue });
+  }
+  return properties;
+}
+
 function addWorklog(
   issueKey: string,
   author: MockUser,
   started: Date,
   timeSpentSeconds: number,
   comment?: string,
+  properties: EntityProperty[] = [],
 ): StoredWorklog {
   issueIdFor(issueKey);
   const worklog: StoredWorklog = {
@@ -147,6 +180,7 @@ function addWorklog(
     authorId: author.accountId,
     started,
     timeSpentSeconds,
+    properties,
     created: new Date(),
   };
   if (comment !== undefined) {
@@ -193,7 +227,13 @@ function renderUser(base: string, version: ApiVersion, user: MockUser): object {
   };
 }
 
-function renderWorklog(base: string, version: ApiVersion, worklog: StoredWorklog): object {
+// Jira leaves a worklog's properties out unless the request says `expand=properties`.
+function renderWorklog(
+  base: string,
+  version: ApiVersion,
+  worklog: StoredWorklog,
+  expand: string[] = [],
+): object {
   const issueId = issueIdFor(worklog.issueKey);
   const author = renderUser(base, version, usersById.get(worklog.authorId) ?? DEV_USER);
   return {
@@ -210,6 +250,7 @@ function renderWorklog(base: string, version: ApiVersion, worklog: StoredWorklog
     timeSpentSeconds: worklog.timeSpentSeconds,
     id: worklog.id,
     issueId,
+    ...(expand.includes('properties') ? { properties: worklog.properties } : {}),
   };
 }
 
@@ -391,6 +432,10 @@ async function handleWorklogs(
 ): Promise<void> {
   const method = req.method ?? 'GET';
   const worklogs = worklogStore.get(issueKey) ?? [];
+  const expand = url.searchParams
+    .getAll('expand')
+    .flatMap((value) => value.split(','))
+    .map((value) => value.trim());
 
   if (method === 'GET' && worklogId === undefined) {
     const startedAfter = parseNonNegativeInt(url.searchParams.get('startedAfter'));
@@ -409,7 +454,7 @@ async function handleWorklogs(
       total: matching.length,
       worklogs: matching
         .slice(startAt, startAt + maxResults)
-        .map((worklog) => renderWorklog(base, version, worklog)),
+        .map((worklog) => renderWorklog(base, version, worklog, expand)),
     });
     return;
   }
@@ -447,6 +492,10 @@ async function handleWorklogs(
           version === '3' ? 'Must be an Atlassian Document Format document' : 'Must be a string';
       }
     }
+    const properties = body['properties'] === undefined ? [] : parseProperties(body['properties']);
+    if (properties === null) {
+      errors['properties'] = 'Must be a list of properties, each with a key and a value';
+    }
     if (Object.keys(errors).length > 0) {
       sendErrors(res, 400, [], errors);
       return;
@@ -457,8 +506,9 @@ async function handleWorklogs(
       new Date(started as string),
       timeSpentSeconds as number,
       text,
+      properties as EntityProperty[],
     );
-    sendJson(res, 201, renderWorklog(base, version, created));
+    sendJson(res, 201, renderWorklog(base, version, created, expand));
     return;
   }
 
@@ -469,7 +519,7 @@ async function handleWorklogs(
   }
 
   if (method === 'GET') {
-    sendJson(res, 200, renderWorklog(base, version, worklogs[index]));
+    sendJson(res, 200, renderWorklog(base, version, worklogs[index], expand));
     return;
   }
 

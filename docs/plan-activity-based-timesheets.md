@@ -305,7 +305,8 @@ Each phase can ship and be tested on its own. Phase 2 is already useful without 
 
 - `domain.ts`: add `JiraWorklog.generated` and `WorklogCreation.source`.
 - `jira-integration.service.ts`: create worklogs with the marker property, and read them with
-  `expand: 'properties'`.
+  `expand: 'properties'`. `jira.js` sends a plain-text comment through API v2, which drops `properties`,
+  so comments are sent as Atlassian Document Format instead.
 - `timesheet-engine.service.ts`: tag each creation with its `source`. `app.ts`: drop the second
   `computePlan` call.
 - `mock-jira-server.ts`: store worklog properties, accept `properties` on POST and support

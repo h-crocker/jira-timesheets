@@ -89,6 +89,7 @@ describe('App (smart component)', () => {
       .filter((row) => row.querySelector('.source-badge')?.getAttribute('data-source') === 'jira')
       .map((row) => row.querySelector('.summary')?.textContent?.trim());
     expect(summaries.sort()).toEqual(['Code review', 'Support ticket', 'Work on feature']);
+    expect(fixture.componentInstance.worklogs().some((worklog) => worklog.generated)).toBe(false);
     expect(root(fixture).textContent).not.toContain("Colleague's pairing session");
     expect(q(fixture, 'plan-summary').textContent).toContain('0 to create, 0 to delete');
     expect((q(fixture, 'sync') as HTMLButtonElement).disabled).toBe(true);
@@ -261,6 +262,7 @@ describe('App (smart component)', () => {
     const worklogs = fixture.componentInstance.worklogs().filter((w) => w.issueKey === 'GWP-SYNC');
     expect(worklogs.length).toBe(1);
     expect(worklogs[0].timeSpentSeconds).toBe(1800);
+    expect(worklogs[0].generated).toBe(true);
     expect(q(fixture, 'plan-summary').textContent).toContain('0 to create, 0 to delete');
     expect((q(fixture, 'sync') as HTMLButtonElement).disabled).toBe(true);
   });

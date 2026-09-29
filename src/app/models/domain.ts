@@ -51,6 +51,8 @@ export interface WorklogCreation {
   started: string;
   timeSpentSeconds: number;
   comment?: string;
+  /** The part of the plan that asked for this worklog. */
+  source: Exclude<CalendarEvent['source'], 'jira'>;
 }
 
 export interface ExecutionPlan {
@@ -64,6 +66,8 @@ export interface JiraWorklog {
   started: Date;
   timeSpentSeconds: number;
   comment?: string;
+  /** Created by this app, as opposed to logged by hand or added automatically by Jira. */
+  generated: boolean;
 }
 
 export interface EngineInput {

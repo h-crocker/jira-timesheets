@@ -137,6 +137,60 @@ describe('mock Jira server', () => {
     expect((await accepted.json()).comment.content[0].content[0].text).toBe('ADF');
   });
 
+  it('stores worklog properties and returns them only when expanded', async () => {
+    const properties = [{ key: 'jira-timesheets', value: { generated: true, version: 1 } }];
+    const response = await fetch(`${base}/rest/api/3/issue/GWP-2070/worklog?expand=properties`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        started: '2026-09-30T09:00:00.000+0000',
+        timeSpentSeconds: 900,
+        properties,
+      }),
+    });
+    expect(response.status).toBe(201);
+    const created = await response.json();
+    expect(WorklogSchema.safeParse(created).error).toBeUndefined();
+    expect(created.properties).toEqual(properties);
+
+    const plain = await getJson(`/rest/api/3/issue/GWP-2070/worklog/${created.id}`);
+    expect(plain.body).not.toHaveProperty('properties');
+
+    const page = await getJson('/rest/api/3/issue/GWP-2070/worklog?expand=properties');
+    expect(PageOfWorklogsSchema.safeParse(page.body).error).toBeUndefined();
+    const byId = new Map(
+      page.body.worklogs.map((worklog: { id: string; properties: unknown }) => [
+        worklog.id,
+        worklog.properties,
+      ]),
+    );
+    expect(byId.get(created.id)).toEqual(properties);
+    expect(
+      [...byId.values()].filter((value) => Array.isArray(value) && value.length === 0),
+    ).toHaveLength(3);
+  });
+
+  it('POST rejects properties without a key or a value', async () => {
+    for (const properties of [
+      { key: 'x', value: 1 },
+      [{ value: 1 }],
+      [{ key: '', value: 1 }],
+      [{ key: 'x' }],
+    ]) {
+      const response = await fetch(`${base}/rest/api/3/issue/GWP-2070/worklog`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          started: '2026-09-30T09:00:00.000+0000',
+          timeSpentSeconds: 900,
+          properties,
+        }),
+      });
+      expect(response.status, JSON.stringify(properties)).toBe(400);
+      expect(Object.keys((await response.json()).errors)).toEqual(['properties']);
+    }
+  });
+
   it('POST with an invalid body returns 400 with Jira-style errors', async () => {
     const response = await fetch(`${base}/rest/api/2/issue/GWP-2070/worklog`, {
       method: 'POST',

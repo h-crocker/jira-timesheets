@@ -6,6 +6,9 @@ import { SettingsService } from './settings.service';
 
 const DEFAULT_HOST = 'http://localhost:3000';
 const PAGE_SIZE = 50;
+/** Worklog property that marks the worklogs this app created. */
+const GENERATED_PROPERTY_KEY = 'jira-timesheets';
+const GENERATED_PROPERTY_VALUE = { generated: true, version: 1 };
 // ADF nodes whose children are inline text rather than blocks.
 const INLINE_PARENTS = new Set<unknown>(['paragraph', 'heading', 'codeBlock']);
 
@@ -33,6 +36,18 @@ function siteOrigin(host: string | undefined): string {
 /** Jira wants yyyy-MM-dd'T'HH:mm:ss.SSSZ (2026-09-28T09:00:00.000+0000), not a trailing "Z". */
 function jiraDateTime(date: Date): string {
   return date.toISOString().replace(/Z$/, '+0000');
+}
+
+/** Plain text as an Atlassian Document Format document, one paragraph per line. */
+function toAdf(text: string) {
+  return {
+    type: 'doc',
+    version: 1,
+    content: text.split('\n').map((line) => ({
+      type: 'paragraph',
+      content: line === '' ? [] : [{ type: 'text', text: line }],
+    })),
+  };
 }
 
 function jqlDate(date: Date): string {
@@ -85,7 +100,10 @@ export class JiraIntegrationService {
       issueIdOrKey: issueKey,
       started: jiraDateTime(new Date(started)),
       timeSpentSeconds,
-      ...(comment === undefined ? {} : { comment }),
+      // jira.js sends a plain-text comment through API v2, which drops `properties`.
+      ...(comment === undefined || comment === '' ? {} : { comment: toAdf(comment) }),
+      properties: [{ key: GENERATED_PROPERTY_KEY, value: GENERATED_PROPERTY_VALUE }],
+      expand: 'properties',
     });
     return this.toJiraWorklog(issueKey, created);
   }
@@ -144,6 +162,7 @@ export class JiraIntegrationService {
         maxResults: PAGE_SIZE,
         startedAfter: from.getTime(),
         startedBefore: to.getTime(),
+        expand: 'properties',
       });
       const items = page.worklogs ?? [];
       for (const item of items) {
@@ -191,6 +210,13 @@ export class JiraIntegrationService {
       started: worklog.started instanceof Date ? worklog.started : new Date(worklog.started ?? 0),
       timeSpentSeconds: worklog.timeSpentSeconds ?? 0,
       comment: this.extractComment(worklog.comment),
+      generated: (worklog.properties ?? []).some(
+        ({ key, value }) =>
+          key === GENERATED_PROPERTY_KEY &&
+          typeof value === 'object' &&
+          value !== null &&
+          (value as { generated?: unknown }).generated === true,
+      ),
     };
   }
 
