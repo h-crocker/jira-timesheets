@@ -83,7 +83,8 @@ npm run build
 
 - `TimesheetEngineService`: pure function from settings and existing worklogs to an execution plan
   (creations, deletions, and the worklogs to remember before deleting). Recurring events win over clashing
-  worklogs, leave (`leave-planner.ts`) wins over both, and allocations fill the rest. A week with its own
+  worklogs, leave (`leave-planner.ts`) wins over both, and allocations fill the rest in 15-minute blocks
+  (any block left over by rounding goes to the largest allocation, so 100% fills every free block). A week with its own
   allocations replaces the automatic worklogs instead. Either way, a second sync changes nothing.
 - `activity-allocations.ts`: pure functions from a week's evidence to its allocations.
 - `SettingsService` / `JiraIntegrationService`: `localStorage` persistence and the `jira.js` client, routed

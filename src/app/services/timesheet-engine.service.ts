@@ -4,6 +4,7 @@ import type {
   EngineInput,
   ExecutionPlan,
   JiraWorklog,
+  PercentageAllocation,
   WorklogCreation,
   WorklogDeletion,
 } from '../models/domain';
@@ -33,6 +34,75 @@ function toEvent(worklog: JiraWorklog): CalendarEvent {
     source: 'jira',
     worklogId: worklog.id,
   };
+}
+
+/** The week's free time in working hours, in order, each gap with the whole blocks it holds. */
+function freeWeekGaps(
+  input: EngineInput,
+  occupied: Interval[],
+): Array<{ gap: Interval; blocks: number }> {
+  return input.settings.workDays
+    .map((weekday) => daySlot(input.weekStart, weekday, input.settings))
+    .sort((a, b) => a.start.getTime() - b.start.getTime())
+    .flatMap((slot) => freeGaps(slot, occupied))
+    .map((gap) => ({ gap, blocks: Math.floor(durationSeconds(gap) / BLOCK_SECONDS) }))
+    .filter(({ blocks }) => blocks > 0);
+}
+
+/**
+ * Shares `remaining` seconds of free time between the allocations in 15-minute blocks, in order
+ * from the start of the week. Each allocation's share is rounded down to whole blocks and the
+ * blocks that rounding leaves over go to the largest allocation, so allocations adding up to 100%
+ * fill every free block.
+ */
+function fillAllocations(
+  allocations: PercentageAllocation[],
+  gaps: Array<{ gap: Interval; blocks: number }>,
+  remaining: number,
+): WorklogCreation[] {
+  const available = Math.min(
+    gaps.reduce((sum, { blocks }) => sum + blocks, 0),
+    Math.floor(remaining / BLOCK_SECONDS),
+  );
+  const exact = allocations.map((allocation) => (available * allocation.percentage) / 100);
+  const blocks = exact.map((share) => Math.floor(share + 1e-9));
+  const total = Math.min(
+    available,
+    Math.floor(exact.reduce((sum, share) => sum + share, 0) + 1e-9),
+  );
+  if (allocations.length > 0) {
+    const largest = allocations.reduce(
+      (best, allocation, index) =>
+        allocation.percentage > allocations[best].percentage ? index : best,
+      0,
+    );
+    blocks[largest] += Math.max(0, total - blocks.reduce((sum, count) => sum + count, 0));
+  }
+
+  const creations: WorklogCreation[] = [];
+  let gapIndex = 0;
+  let used = 0;
+  allocations.forEach((allocation, index) => {
+    let left = blocks[index];
+    while (left > 0 && gapIndex < gaps.length) {
+      const { gap, blocks: room } = gaps[gapIndex];
+      const take = Math.min(left, room - used);
+      creations.push({
+        issueKey: allocation.issueKey,
+        started: new Date(gap.start.getTime() + used * BLOCK_SECONDS * 1000).toISOString(),
+        timeSpentSeconds: take * BLOCK_SECONDS,
+        comment: allocation.summary,
+        source: 'allocated',
+      });
+      left -= take;
+      used += take;
+      if (used === room) {
+        gapIndex++;
+        used = 0;
+      }
+    }
+  });
+  return creations;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -120,44 +190,8 @@ export class TimesheetEngineService {
     const occupiedSeconds = occupied.reduce((sum, interval) => sum + durationSeconds(interval), 0);
     const remaining = totalWeekCapacitySeconds - occupiedSeconds;
 
-    const allocated: WorklogCreation[] = [];
-    if (remaining > 0) {
-      const daySlots = settings.workDays
-        .map((weekday) => daySlot(weekStart, weekday, settings))
-        .sort((a, b) => a.start.getTime() - b.start.getTime());
-
-      for (const allocation of allocations) {
-        let allocationRemaining = remaining * (allocation.percentage / 100);
-        for (const slot of daySlots) {
-          if (allocationRemaining <= 0) {
-            break;
-          }
-          for (const gap of freeGaps(slot, occupied)) {
-            if (allocationRemaining <= 0) {
-              break;
-            }
-            const chunk = Math.min(allocationRemaining, durationSeconds(gap));
-            const rounded = Math.floor(chunk / BLOCK_SECONDS) * BLOCK_SECONDS;
-            if (rounded <= 0) {
-              continue;
-            }
-            const chunkStart = gap.start;
-            allocated.push({
-              issueKey: allocation.issueKey,
-              started: chunkStart.toISOString(),
-              timeSpentSeconds: rounded,
-              comment: allocation.summary,
-              source: 'allocated',
-            });
-            occupied.push({
-              start: chunkStart,
-              end: new Date(chunkStart.getTime() + rounded * 1000),
-            });
-            allocationRemaining -= rounded;
-          }
-        }
-      }
-    }
+    const allocated =
+      remaining > 0 ? fillAllocations(allocations, freeWeekGaps(input, occupied), remaining) : [];
 
     // When replacing, the app's own worklogs that match the fill stay; the rest go.
     const kept = new Set<string>();

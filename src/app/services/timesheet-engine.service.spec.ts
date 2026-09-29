@@ -411,6 +411,50 @@ describe('TimesheetEngineService', () => {
     expect(second).toEqual({ deletions: [], creations: [], absorb: [] });
   });
 
+  it('fills every free block: blocks left over by rounding go to the largest allocation', () => {
+    const settings = defaultSettings({
+      schedules: [
+        { id: 's1', issueKey: 'GWP-1', summary: 'Standup', weekdays: [1, 2, 3, 4, 5], startTime: '09:30', durationSeconds: 900, enabled: true },
+      ],
+      allocations: [
+        { id: 'a1', issueKey: 'GWP-7', summary: 'Rate limiting', percentage: 28 },
+        { id: 'a2', issueKey: 'GWP-8', summary: 'SSO login', percentage: 49 },
+        { id: 'a3', issueKey: 'GWP-9', summary: 'General', percentage: 23 },
+      ],
+    });
+
+    const plan = engine.computePlan(input({ settings }));
+
+    // 145 free blocks: 40.6, 71.05 and 33.35 round down to 40, 71 and 33, and the one left over
+    // goes to the 49% allocation.
+    const blocks = (issueKey: string) =>
+      plan.creations
+        .filter((creation) => creation.issueKey === issueKey)
+        .reduce((sum, creation) => sum + creation.timeSpentSeconds, 0) / 900;
+    expect([blocks('GWP-7'), blocks('GWP-8'), blocks('GWP-9')]).toEqual([40, 72, 33]);
+    const last = plan.creations[plan.creations.length - 1];
+    expect(new Date(new Date(last.started).getTime() + last.timeSpentSeconds * 1000)).toEqual(at(4, 16, 30));
+    expectNoOverlaps(toSpans(plan.creations), 'leftover blocks');
+  });
+
+  it('gives leftover blocks to the first of equally large allocations, and leaves unallocated time empty', () => {
+    const settings = defaultSettings({
+      workDays: [1],
+      allocations: [
+        { id: 'a1', issueKey: 'GWP-7', summary: 'First', percentage: 45 },
+        { id: 'a2', issueKey: 'GWP-8', summary: 'Second', percentage: 45 },
+      ],
+    });
+
+    const plan = engine.computePlan(input({ settings }));
+
+    // 30 blocks: 13.5 and 13.5 round down to 13 each; 90% of 30 is 27, so one block is left over.
+    expect(plan.creations.map((creation) => [creation.issueKey, creation.timeSpentSeconds / 900])).toEqual([
+      ['GWP-7', 14],
+      ['GWP-8', 13],
+    ]);
+  });
+
   it('places an allocation that fits one day as a single chunk', () => {
     const settings = defaultSettings({
       allocations: [{ id: 'a1', issueKey: 'GWP-9', summary: 'Allocation', percentage: 10 }],
@@ -488,6 +532,23 @@ describe('TimesheetEngineService', () => {
       const allocated = plan.creations.reduce((sum, creation) => sum + creation.timeSpentSeconds, 0);
       // The whole week but Friday's leave and Tuesday's standup.
       expect(allocated).toBe(4 * 27000 - 900);
+    });
+
+    it('fills the whole week around meetings and leave, with no time lost to rounding', () => {
+      const settings = defaultSettings({
+        weekAllocations,
+        leaveIssueKey: 'HR-1',
+        schedules: [
+          { id: 's', issueKey: 'GWP-1', summary: 'Standup', weekdays: [1, 2, 3, 4, 5], startTime: '09:30', durationSeconds: 900, enabled: true },
+        ],
+      });
+      const plan = engine.computePlan(
+        input({ settings, worklogs: [worklog('leave', at(4, 9), 13500, 'HR-1')] }),
+      );
+      const logged = plan.creations.reduce((sum, creation) => sum + creation.timeSpentSeconds, 0);
+      // Every working minute but Friday morning's leave: four standups, the rest allocated.
+      expect(logged).toBe(4 * (27000 - 900) + 13500 + 4 * 900);
+      expect(plan.creations.at(-1)).toMatchObject({ started: at(4, 12, 45).toISOString(), timeSpentSeconds: 13500 });
     });
 
     it('plans nothing once synced, and re-plans only its own worklogs when the allocations change', () => {
