@@ -1,4 +1,10 @@
-import type { CalendarEvent, JiraWorklog, UserSettings } from '../models/domain';
+import {
+  type CalendarEvent,
+  type JiraWorklog,
+  LAST_WEEK_OF_MONTH,
+  type RecurringSchedule,
+  type UserSettings,
+} from '../models/domain';
 
 /** Worklogs are planned in blocks of this many seconds. */
 export const BLOCK_SECONDS = 900;
@@ -144,18 +150,73 @@ export function freeGaps(slot: Interval, occupied: Interval[]): Interval[] {
   return gaps;
 }
 
-/** One event per enabled schedule and scheduled work day of the week. */
+/** A yyyy-mm-dd date as a local midnight, or null when it isn't one. */
+export function parseDateKey(key: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  if (match === null) {
+    return null;
+  }
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** The Monday of the week `date` falls in, at local midnight. */
+export function startOfWeek(date: Date): Date {
+  return addDays(startOfDay(date), 1 - isoWeekday(date));
+}
+
+/**
+ * Which of its weekday in the month `date` is: 1 for the first Monday, Tuesday, …, up to 5, and
+ * `LAST_WEEK_OF_MONTH` when it is the last one; a fourth that is also the last counts as both.
+ */
+function weekOfMonthMatches(date: Date, weekOfMonth: number): boolean {
+  if (weekOfMonth === LAST_WEEK_OF_MONTH) {
+    return addDays(date, 7).getMonth() !== date.getMonth();
+  }
+  return Math.ceil(date.getDate() / 7) === weekOfMonth;
+}
+
+/** Whether the schedule happens on `day`, which is one of its weekdays. */
+export function scheduleOccursOn(schedule: RecurringSchedule, day: Date): boolean {
+  switch (schedule.repeat ?? 'weekly') {
+    case 'weekly':
+      return true;
+    case 'fortnightly': {
+      const anchor = parseDateKey(schedule.anchorWeek ?? '');
+      if (anchor === null) {
+        return true;
+      }
+      const weeks = Math.round(
+        (startOfWeek(day).getTime() - startOfWeek(anchor).getTime()) / (7 * 24 * 3600 * 1000),
+      );
+      return weeks % 2 === 0;
+    }
+    case 'monthly':
+      return weekOfMonthMatches(day, schedule.weekOfMonth ?? 1);
+  }
+}
+
+/**
+ * One event per enabled schedule and scheduled work day of the week it happens in: every week,
+ * every other week from its anchor week, or on the given weekday of the month. Where two events
+ * overlap, only one is kept: the longer, or of equally long ones the one whose schedule comes
+ * later in the list. The other is neither logged nor counted against the week's time.
+ */
 export function recurringEvents(weekStart: Date, settings: UserSettings): CalendarEvent[] {
-  const events: CalendarEvent[] = [];
-  for (const schedule of settings.schedules) {
+  const events: (CalendarEvent & { rank: number })[] = [];
+  settings.schedules.forEach((schedule, rank) => {
     if (!schedule.enabled) {
-      continue;
+      return;
     }
     for (const weekday of schedule.weekdays) {
       if (!settings.workDays.includes(weekday)) {
         continue;
       }
-      const start = timeOnDay(addDays(weekStart, weekday - 1), schedule.startTime);
+      const day = addDays(weekStart, weekday - 1);
+      if (!scheduleOccursOn(schedule, day)) {
+        continue;
+      }
+      const start = timeOnDay(day, schedule.startTime);
       events.push({
         id: `${schedule.id}-weekday-${weekday}`,
         issueKey: schedule.issueKey,
@@ -164,10 +225,20 @@ export function recurringEvents(weekStart: Date, settings: UserSettings): Calend
         end: new Date(start.getTime() + schedule.durationSeconds * 1000),
         timeSpentSeconds: schedule.durationSeconds,
         source: 'recurring',
+        rank,
       });
     }
+  });
+
+  const kept: CalendarEvent[] = [];
+  for (const { rank: _rank, ...event } of [...events].sort(
+    (a, b) => b.timeSpentSeconds - a.timeSpentSeconds || b.rank - a.rank,
+  )) {
+    if (!kept.some((other) => overlaps(other, event))) {
+      kept.push(event);
+    }
   }
-  return events;
+  return kept.sort((a, b) => a.start.getTime() - b.start.getTime());
 }
 
 /**

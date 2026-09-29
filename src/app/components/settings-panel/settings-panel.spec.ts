@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import type { JiraCredentials, UserSettings } from '../../models/domain';
+import type { JiraCredentials, RecurringSchedule, UserSettings } from '../../models/domain';
 import { SettingsPanelComponent } from './settings-panel';
 
 const SETTINGS: UserSettings = {
@@ -11,6 +11,7 @@ const SETTINGS: UserSettings = {
   schedules: [
     { id: 's1', issueKey: 'GWP-1', summary: 'Standup', weekdays: [1, 3], startTime: '09:30', durationSeconds: 900, enabled: true },
   ],
+  spreadPrefixes: ['MT'],
   weekAllocations: {},
   leaveIssueKey: '',
   placeholderIssueKey: '',
@@ -139,8 +140,109 @@ describe('SettingsPanelComponent', () => {
     q(fixture, 'schedule-form').dispatchEvent(new Event('submit', { cancelable: true }));
 
     expect(emitted).toEqual([
-      expect.objectContaining({ weekdays: [2, 4], startTime: '14:00', durationSeconds: 5400, enabled: true }),
+      expect.objectContaining({ weekdays: [2, 4], startTime: '14:00', durationSeconds: 5400, enabled: true, repeat: 'weekly' }),
     ]);
+  });
+
+  it('shows which allocations are scattered and which are logged in blocks', () => {
+    const fixture = create({
+      ...SETTINGS,
+      allocations: [
+        ...SETTINGS.allocations,
+        { id: 'a2', issueKey: 'MT-5', summary: 'Support', percentage: 25 },
+      ],
+    });
+    expect(q<HTMLInputElement>(fixture, 'spread-prefixes').value).toBe('MT');
+    const order = q(fixture, 'allocations-order').textContent!.replace(/\s+/g, ' ');
+    expect(order).toContain('Logged one after another in blocks: GWP-2070.');
+    expect(order).toContain('Scattered through the week: MT-5.');
+  });
+
+  it('emits the scattered ticket prefixes when they change', () => {
+    const fixture = create();
+    const emitted: string[][] = [];
+    fixture.componentInstance.spreadPrefixesChanged.subscribe((v) => emitted.push(v));
+    const field = q<HTMLInputElement>(fixture, 'spread-prefixes');
+    const change = (value: string) => {
+      field.value = value;
+      field.dispatchEvent(new Event('change'));
+    };
+
+    change('MT, ops  GWP-');
+    change('MT');
+    change('');
+
+    expect(emitted).toEqual([['MT', 'ops', 'GWP-'], []]);
+  });
+
+  it('says how often each schedule repeats', () => {
+    const fixture = create({
+      ...SETTINGS,
+      schedules: [
+        ...SETTINGS.schedules,
+        { id: 's2', issueKey: 'GWP-2', summary: 'Review', weekdays: [3], startTime: '14:00', durationSeconds: 3600, enabled: true, repeat: 'fortnightly', anchorWeek: '2026-09-28' },
+        { id: 's3', issueKey: 'GWP-3', summary: 'All hands', weekdays: [2], startTime: '11:00', durationSeconds: 3600, enabled: true, repeat: 'monthly', weekOfMonth: -1 },
+      ],
+    });
+    expect(q(fixture, 'schedule-s1').textContent).toContain('every week');
+    expect(q(fixture, 'schedule-s2').textContent).toContain('every other week from Sep 28');
+    expect(q(fixture, 'schedule-s3').textContent).toContain('last of the month');
+  });
+
+  it('emits a fortnightly schedule anchored to the week on show, or to the week of a chosen date', () => {
+    const fixture = create();
+    fixture.componentRef.setInput('weekStart', new Date(2026, 8, 28));
+    fixture.detectChanges();
+    const emitted: RecurringSchedule[] = [];
+    fixture.componentInstance.scheduleAdded.subscribe((v) => emitted.push(v));
+    const select = (id: string, value: string) => {
+      const field = q<HTMLSelectElement>(fixture, id);
+      field.value = value;
+      field.dispatchEvent(new Event('change'));
+      fixture.detectChanges();
+    };
+    const submit = () => {
+      q(fixture, 'schedule-form').dispatchEvent(new Event('submit', { cancelable: true }));
+      fixture.detectChanges();
+    };
+
+    expect(q(fixture, 'sched-anchor-date')).toBeNull();
+    select('sched-repeat', 'fortnightly');
+    expect(q<HTMLInputElement>(fixture, 'sched-anchor-date').value).toBe('2026-09-28');
+    q<HTMLInputElement>(fixture, 'sched-weekday-3').click();
+    submit();
+
+    select('sched-repeat', 'fortnightly');
+    type(q<HTMLInputElement>(fixture, 'sched-anchor-date'), '2026-10-08');
+    submit();
+
+    expect(emitted.map((schedule) => [schedule.repeat, schedule.anchorWeek, schedule.weekOfMonth])).toEqual([
+      ['fortnightly', '2026-09-28', undefined],
+      ['fortnightly', '2026-10-05', undefined],
+    ]);
+    expect(emitted[0].weekdays).toEqual([3]);
+    // The form goes back to weekly.
+    expect(q<HTMLSelectElement>(fixture, 'sched-repeat').value).toBe('weekly');
+  });
+
+  it('emits a monthly schedule with the chosen week of the month', () => {
+    const fixture = create();
+    const emitted: RecurringSchedule[] = [];
+    fixture.componentInstance.scheduleAdded.subscribe((v) => emitted.push(v));
+    const select = (id: string, value: string) => {
+      const field = q<HTMLSelectElement>(fixture, id);
+      field.value = value;
+      field.dispatchEvent(new Event('change'));
+      fixture.detectChanges();
+    };
+
+    select('sched-repeat', 'monthly');
+    expect(q(fixture, 'sched-anchor-date')).toBeNull();
+    select('sched-week-of-month', '-1');
+    q(fixture, 'schedule-form').dispatchEvent(new Event('submit', { cancelable: true }));
+
+    expect(emitted).toEqual([expect.objectContaining({ repeat: 'monthly', weekOfMonth: -1 })]);
+    expect(emitted[0].anchorWeek).toBeUndefined();
   });
 
   it('prefills credentials and emits changes / clear', () => {

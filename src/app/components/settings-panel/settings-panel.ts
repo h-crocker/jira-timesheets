@@ -1,14 +1,50 @@
 import { Component, input, output, signal } from '@angular/core';
-import type {
-  GithubCredentials,
-  JiraCredentials,
-  PercentageAllocation,
-  RecurringSchedule,
-  UserSettings,
+import {
+  type GithubCredentials,
+  type JiraCredentials,
+  LAST_WEEK_OF_MONTH,
+  type PercentageAllocation,
+  type RecurringSchedule,
+  type ScheduleRepeat,
+  type UserSettings,
 } from '../../models/domain';
 
 const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 const DEFAULT_GITHUB_API_URL = 'https://api.github.com';
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WEEKS_OF_MONTH: { value: number; label: string }[] = [
+  { value: 1, label: '1st' },
+  { value: 2, label: '2nd' },
+  { value: 3, label: '3rd' },
+  { value: 4, label: '4th' },
+  { value: LAST_WEEK_OF_MONTH, label: 'last' },
+];
+
+/** A local yyyy-mm-dd date. */
+function dateKey(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** The Monday of the week a yyyy-mm-dd date falls in, or null when it isn't a date. */
+function mondayOf(key: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  if (match === null) {
+    return null;
+  }
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+  return dateKey(date);
+}
+
+/** Sep 28, from a yyyy-mm-dd date. */
+function shortDate(key: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  return match === null ? key : `${MONTHS[Number(match[2]) - 1]} ${Number(match[3])}`;
+}
 
 export type WorkHoursChange = Pick<
   UserSettings,
@@ -33,6 +69,8 @@ export class SettingsPanelComponent {
   weekAllocations = input<PercentageAllocation[] | null>(null);
   /** The week on show, e.g. "Sep 28 – Oct 4". */
   weekLabel = input('');
+  /** The Monday of the week on show, which a new fortnightly schedule starts from. */
+  weekStart = input<Date | null>(null);
   /** What each of the week's allocations was filled from, by issue key. */
   allocationEvidence = input<Record<string, string>>({});
   /** Disables filling while the app is busy. */
@@ -43,6 +81,8 @@ export class SettingsPanelComponent {
   /** An allocation edited in place, with the same id. */
   allocationChanged = output<PercentageAllocation>();
   allocationRemoved = output<string>();
+  /** The issue key prefixes whose allocations are scattered through the week. */
+  spreadPrefixesChanged = output<string[]>();
   fillFromActivity = output<void>();
   useUsualAllocations = output<void>();
   scheduleAdded = output<RecurringSchedule>();
@@ -52,6 +92,7 @@ export class SettingsPanelComponent {
   githubCredentialsChanged = output<GithubCredentials | null>();
 
   protected readonly weekdayNames = WEEKDAY_NAMES;
+  protected readonly weeksOfMonth = WEEKS_OF_MONTH;
 
   protected readonly startTime = signal<string | null>(null);
   protected readonly hoursPerDay = signal<number | null>(null);
@@ -67,6 +108,10 @@ export class SettingsPanelComponent {
   protected readonly schedWeekdays = signal<number[]>([]);
   protected readonly schedStartTime = signal('');
   protected readonly schedDurationHours = signal(0);
+  protected readonly schedRepeat = signal<ScheduleRepeat>('weekly');
+  /** A date in a week a new fortnightly schedule happens in; the week on show when blank. */
+  protected readonly schedAnchorDate = signal('');
+  protected readonly schedWeekOfMonth = signal(1);
 
   protected readonly leaveIssueKey = signal<string | null>(null);
   protected readonly placeholderIssueKey = signal<string | null>(null);
@@ -82,6 +127,25 @@ export class SettingsPanelComponent {
   /** The allocations the week on show uses: its own, or the usual ones. */
   protected shownAllocations(): PercentageAllocation[] {
     return this.weekAllocations() ?? this.settings().allocations;
+  }
+
+  /** The prefixes as typed in the field, e.g. "MT, OPS". */
+  protected spreadPrefixesText(): string {
+    return this.settings().spreadPrefixes.join(', ');
+  }
+
+  /** How the allocations on show are logged, for the hint under the list. */
+  protected allocationOrder(): { spread: string[]; blocks: string[] } {
+    const prefixes = this.settings().spreadPrefixes.map((prefix) => prefix.trim().toUpperCase());
+    const spread: string[] = [];
+    const blocks: string[] = [];
+    for (const allocation of this.shownAllocations()) {
+      const key = allocation.issueKey.trim().toUpperCase();
+      (prefixes.some((prefix) => prefix !== '' && key.startsWith(prefix)) ? spread : blocks).push(
+        allocation.issueKey,
+      );
+    }
+    return { spread, blocks };
   }
 
   /** What the allocations on show add up to, in percent. */
@@ -187,6 +251,17 @@ export class SettingsPanelComponent {
     this.allocationRemoved.emit(id);
   }
 
+  /** Emits the prefixes typed in the field, split on commas and spaces. */
+  protected changeSpreadPrefixes(event: Event): void {
+    const prefixes = (event.target as HTMLInputElement).value
+      .split(/[\s,]+/)
+      .filter((prefix) => prefix !== '');
+    const current = this.settings().spreadPrefixes;
+    if (prefixes.length !== current.length || prefixes.some((prefix, i) => prefix !== current[i])) {
+      this.spreadPrefixesChanged.emit(prefixes);
+    }
+  }
+
   protected onSchedIssueKeyInput(event: Event): void {
     this.schedIssueKey.set((event.target as HTMLInputElement).value);
   }
@@ -204,6 +279,42 @@ export class SettingsPanelComponent {
     this.schedDurationHours.set(Number.isFinite(value) ? value : 0);
   }
 
+  protected onSchedRepeatInput(event: Event): void {
+    const value = (event.target as HTMLSelectElement).value;
+    this.schedRepeat.set(value === 'fortnightly' || value === 'monthly' ? value : 'weekly');
+  }
+
+  protected onSchedAnchorDateInput(event: Event): void {
+    this.schedAnchorDate.set((event.target as HTMLInputElement).value);
+  }
+
+  protected onSchedWeekOfMonthInput(event: Event): void {
+    const value = Number((event.target as HTMLSelectElement).value);
+    this.schedWeekOfMonth.set(WEEKS_OF_MONTH.some((week) => week.value === value) ? value : 1);
+  }
+
+  /** The date field's default for a fortnightly schedule: the Monday of the week on show. */
+  protected effectiveSchedAnchorDate(): string {
+    const start = this.weekStart();
+    return this.schedAnchorDate() || (start === null ? dateKey(new Date()) : dateKey(start));
+  }
+
+  /** How often a schedule in the list happens, e.g. "every other week from Sep 28". */
+  protected repeatLabel(schedule: RecurringSchedule): string {
+    switch (schedule.repeat ?? 'weekly') {
+      case 'weekly':
+        return 'every week';
+      case 'fortnightly':
+        return schedule.anchorWeek === undefined
+          ? 'every other week'
+          : `every other week from ${shortDate(schedule.anchorWeek)}`;
+      case 'monthly': {
+        const week = WEEKS_OF_MONTH.find((item) => item.value === schedule.weekOfMonth);
+        return `${week?.label ?? '1st'} of the month`;
+      }
+    }
+  }
+
   protected toggleScheduleWeekday(day: number): void {
     const current = this.schedWeekdays();
     this.schedWeekdays.set(
@@ -215,6 +326,7 @@ export class SettingsPanelComponent {
 
   protected addSchedule(event: Event): void {
     event.preventDefault();
+    const repeat = this.schedRepeat();
     this.scheduleAdded.emit({
       id: crypto.randomUUID(),
       issueKey: this.schedIssueKey(),
@@ -223,12 +335,20 @@ export class SettingsPanelComponent {
       startTime: this.schedStartTime(),
       durationSeconds: Math.round(this.schedDurationHours() * 3600),
       enabled: true,
+      repeat,
+      ...(repeat === 'fortnightly'
+        ? { anchorWeek: mondayOf(this.effectiveSchedAnchorDate()) ?? undefined }
+        : {}),
+      ...(repeat === 'monthly' ? { weekOfMonth: this.schedWeekOfMonth() } : {}),
     });
     this.schedIssueKey.set('');
     this.schedSummary.set('');
     this.schedWeekdays.set([]);
     this.schedStartTime.set('');
     this.schedDurationHours.set(0);
+    this.schedRepeat.set('weekly');
+    this.schedAnchorDate.set('');
+    this.schedWeekOfMonth.set(1);
   }
 
   protected removeSchedule(id: string): void {

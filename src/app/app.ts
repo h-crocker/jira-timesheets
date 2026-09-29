@@ -291,6 +291,10 @@ export class App {
     }
   }
 
+  protected onSpreadPrefixesChanged(spreadPrefixes: string[]): void {
+    this.settingsService.updateSettings({ spreadPrefixes });
+  }
+
   protected onScheduleAdded(schedule: RecurringSchedule): void {
     this.settingsService.addSchedule(schedule);
   }

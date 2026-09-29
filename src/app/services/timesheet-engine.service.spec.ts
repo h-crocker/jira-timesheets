@@ -26,6 +26,7 @@ function defaultSettings(overrides: Partial<UserSettings> = {}): UserSettings {
     workDays: [1, 2, 3, 4, 5],
     allocations: [],
     schedules: [],
+    spreadPrefixes: [],
     weekAllocations: {},
     leaveIssueKey: '',
     placeholderIssueKey: '',
@@ -355,7 +356,7 @@ describe('TimesheetEngineService', () => {
     );
   });
 
-  it('takes turns between the allocations every morning and afternoon', () => {
+  it('logs the allocations one after another in blocks, so one task follows another', () => {
     const settings = defaultSettings({
       allocations: [
         { id: 'a1', issueKey: 'GWP-9', summary: 'First', percentage: 50 },
@@ -365,53 +366,61 @@ describe('TimesheetEngineService', () => {
 
     const plan = engine.computePlan(input({ settings }));
 
-    // Each half day has its part of each allocation in turn, then its part of the 20% left over.
-    expect(plan.creations.slice(0, 4).map((creation) => [creation.issueKey, creation.started, creation.timeSpentSeconds])).toEqual([
-      ['GWP-9', at(0, 9).toISOString(), 7200],
-      ['GWP-10', at(0, 11).toISOString(), 3600],
-      ['GWP-9', at(0, 13, 45).toISOString(), 6300],
-      ['GWP-10', at(0, 15, 30).toISOString(), 4500],
-    ]);
+    // The first allocation takes the first 75 blocks of the week, the second the next 45, and the
+    // 20% left over is left empty at the end of each morning and afternoon.
     expect([seconds(plan.creations, 'GWP-9'), seconds(plan.creations, 'GWP-10')]).toEqual([75 * 900, 45 * 900]);
-    for (const day of [0, 1, 2, 3, 4]) {
-      for (const half of ['morning', 'afternoon'] as const) {
-        const issues = plan.creations.filter((creation) => inHalf(creation, day, half)).map((creation) => creation.issueKey);
-        expect(issues, `day ${day} ${half}`).toEqual(['GWP-9', 'GWP-10']);
-      }
-    }
+    const keys = plan.creations.map((creation) => creation.issueKey);
+    expect(keys.lastIndexOf('GWP-9')).toBeLessThan(keys.indexOf('GWP-10'));
+    expect(plan.creations.slice(0, 3).map((creation) => [creation.issueKey, creation.started, creation.timeSpentSeconds])).toEqual([
+      ['GWP-9', at(0, 9).toISOString(), 12 * 900],
+      ['GWP-9', at(0, 13, 45).toISOString(), 12 * 900],
+      ['GWP-9', at(1, 9).toISOString(), 12 * 900],
+    ]);
+    const ends = plan.creations.map((creation) => new Date(creation.started).getTime() + creation.timeSpentSeconds * 1000);
+    expect(ends.some((end) => end === at(0, 12, 45).getTime() || end === at(0, 17, 30).getTime())).toBe(false);
     expectNoOverlaps(toSpans(plan.creations), 'multiple allocations');
   });
 
-  it('logs a 10% allocation 15 to 30 minutes at a time, alongside the others every half day', () => {
+  it('scatters allocations on the configured prefixes through the week, and logs the rest in blocks', () => {
     const settings = defaultSettings({
+      spreadPrefixes: ['mt'],
       schedules: [
         { id: 's1', issueKey: 'GWP-1', summary: 'Standup', weekdays: [1, 2, 3, 4, 5], startTime: '09:30', durationSeconds: 900, enabled: true },
       ],
       allocations: [
         { id: 'a1', issueKey: 'GWP-7', summary: 'Main', percentage: 40 },
         { id: 'a2', issueKey: 'GWP-8', summary: 'Second', percentage: 30 },
-        { id: 'a3', issueKey: 'GWP-9', summary: 'Third', percentage: 20 },
-        { id: 'a4', issueKey: 'GWP-10', summary: 'Small', percentage: 10 },
+        { id: 'a3', issueKey: 'MT-9', summary: 'Support', percentage: 20 },
+        { id: 'a4', issueKey: 'MT-10', summary: 'Small', percentage: 10 },
       ],
     });
 
     const plan = engine.computePlan(input({ settings }));
 
-    const small = plan.creations.filter((creation) => creation.issueKey === 'GWP-10');
-    expect(small).toHaveLength(10);
-    expect(small.every((creation) => creation.timeSpentSeconds >= 900 && creation.timeSpentSeconds <= 1800)).toBe(true);
-    for (const day of [0, 1, 2, 3, 4]) {
-      for (const half of ['morning', 'afternoon'] as const) {
-        const issues = plan.creations
-          .filter((creation) => creation.source === 'allocated' && inHalf(creation, day, half))
-          .map((creation) => creation.issueKey);
-        expect(new Set(issues), `day ${day} ${half}`).toEqual(new Set(['GWP-7', 'GWP-8', 'GWP-9', 'GWP-10']));
+    // 145 free blocks: 58, 43, 29 and 14, and the block left over goes to the largest.
+    expect(['GWP-7', 'GWP-8', 'MT-9', 'MT-10'].map((key) => seconds(plan.creations, key) / 900)).toEqual([59, 43, 29, 14]);
+    // The MT tickets turn up every day, 15 to 30 minutes at a time (case doesn't matter).
+    for (const key of ['MT-9', 'MT-10']) {
+      const scattered = plan.creations.filter((creation) => creation.issueKey === key);
+      expect(scattered.every((creation) => creation.timeSpentSeconds <= 1800), key).toBe(true);
+      for (const day of [0, 1, 2, 3, 4]) {
+        expect(scattered.some((creation) => inHalf(creation, day, 'morning') || inHalf(creation, day, 'afternoon')), `${key} day ${day}`).toBe(true);
       }
     }
-    // No allocation runs for more than half of a morning or afternoon.
-    const longest = Math.max(...plan.creations.map((creation) => creation.timeSpentSeconds));
-    expect(longest).toBeLessThanOrEqual(1.5 * 3600);
-    expectNoOverlapWithOccupied(plan.creations, lunches(), 'four allocations');
+    // The others are logged one after the other, GWP-7 first, around the scattered ones.
+    const keys = plan.creations.filter((creation) => creation.source === 'allocated').map((creation) => creation.issueKey);
+    expect(keys.lastIndexOf('GWP-7')).toBeLessThan(keys.indexOf('GWP-8'));
+    expectNoOverlapWithOccupied(plan.creations, lunches(), 'scattered allocations');
+
+    // The scattering is the same every time the week is planned, so syncing twice changes nothing,
+    // but differs from week to week.
+    expect(engine.computePlan(input({ settings }))).toEqual(plan);
+    const synced = applied([], plan);
+    expect(engine.computePlan(input({ settings, worklogs: synced }))).toEqual({ deletions: [], creations: [], absorb: [] });
+    const nextWeek = engine.computePlan(input({ settings, weekStart: new Date(2026, 9, 5) }));
+    const starts = (creations: WorklogCreation[]) =>
+      creations.filter((creation) => creation.issueKey === 'MT-10').map((creation) => new Date(creation.started).getDay() * 24 + new Date(creation.started).getHours());
+    expect(starts(nextWeek.creations)).not.toEqual(starts(plan.creations));
   });
 
   it('ignores worklogs outside the target week', () => {
@@ -608,13 +617,82 @@ describe('TimesheetEngineService', () => {
 
     const plan = engine.computePlan(input({ settings }));
 
-    // 30 blocks shared 100:50, so the allocation added last still gets its third of each half day.
+    // 30 blocks shared 100:50, so the allocation added last still gets its third of the day.
     expect(plan.creations.map((creation) => [creation.issueKey, creation.timeSpentSeconds / 900])).toEqual([
-      ['GWP-7', 10],
-      ['GWP-8', 5],
-      ['GWP-7', 10],
-      ['GWP-8', 5],
+      ['GWP-7', 15],
+      ['GWP-7', 5],
+      ['GWP-8', 10],
     ]);
+  });
+
+  it('keeps only the longest of overlapping recurring events, and frees the rest of the day', () => {
+    const settings = defaultSettings({
+      schedules: [
+        { id: 's1', issueKey: 'GWP-1', summary: 'Standup', weekdays: [1, 2, 3, 4, 5], startTime: '09:30', durationSeconds: 900, enabled: true },
+        { id: 's2', issueKey: 'GWP-2', summary: 'Planning', weekdays: [1], startTime: '09:00', durationSeconds: 7200, enabled: true },
+      ],
+      allocations: [{ id: 'a1', issueKey: 'GWP-9', summary: 'Allocation', percentage: 100 }],
+    });
+
+    const plan = engine.computePlan(input({ settings }));
+
+    const recurring = plan.creations.filter((creation) => creation.source === 'recurring');
+    expect(recurring.filter((creation) => new Date(creation.started) < at(1, 0))).toEqual([
+      { issueKey: 'GWP-2', started: at(0, 9).toISOString(), timeSpentSeconds: 7200, comment: 'Planning', source: 'recurring' },
+    ]);
+    expect(seconds(plan.creations, 'GWP-1')).toBe(4 * 900);
+    // Monday's standup is neither logged nor counted: the allocation fills the rest of the day.
+    expect(seconds(plan.creations, 'GWP-9')).toBe(5 * 27000 - 7200 - 4 * 900);
+    expect(plan.creations.find((creation) => creation.issueKey === 'GWP-9')?.started).toBe(at(0, 11).toISOString());
+    expectNoOverlaps(toSpans(plan.creations), 'overlapping schedules');
+  });
+
+  it('keeps the later of two equally long overlapping recurring events', () => {
+    const settings = defaultSettings({
+      workDays: [1],
+      schedules: [
+        { id: 's1', issueKey: 'GWP-1', summary: 'Older', weekdays: [1], startTime: '10:00', durationSeconds: 3600, enabled: true },
+        { id: 's2', issueKey: 'GWP-2', summary: 'Newer', weekdays: [1], startTime: '10:30', durationSeconds: 3600, enabled: true },
+      ],
+    });
+
+    expect(engine.computePlan(input({ settings })).creations).toEqual([
+      { issueKey: 'GWP-2', started: at(0, 10, 30).toISOString(), timeSpentSeconds: 3600, comment: 'Newer', source: 'recurring' },
+    ]);
+  });
+
+  it('logs a fortnightly schedule every other week from its anchor week', () => {
+    const schedule = { id: 's1', issueKey: 'GWP-1', summary: 'Sprint review', weekdays: [3], startTime: '14:00', durationSeconds: 3600, enabled: true };
+    const weeks = (anchorWeek: string) =>
+      [new Date(2026, 8, 28), new Date(2026, 9, 5), new Date(2026, 9, 12)].map(
+        (weekStart) =>
+          engine.computePlan(
+            input({ weekStart, settings: defaultSettings({ schedules: [{ ...schedule, repeat: 'fortnightly', anchorWeek }] }) }),
+          ).creations.length,
+      );
+
+    expect(weeks('2026-09-28')).toEqual([1, 0, 1]);
+    expect(weeks('2026-09-14')).toEqual([1, 0, 1]);
+    // Any date in the anchor week will do.
+    expect(weeks('2026-10-08')).toEqual([0, 1, 0]);
+    // Without a usable anchor, the schedule happens every week.
+    expect(weeks('not a date')).toEqual([1, 1, 1]);
+  });
+
+  it('logs a monthly schedule on the given weekday of the month', () => {
+    const schedule = { id: 's1', issueKey: 'GWP-1', summary: 'All hands', weekdays: [2], startTime: '11:00', durationSeconds: 3600, enabled: true };
+    const weeks = (weekOfMonth: number) =>
+      [new Date(2026, 8, 21), new Date(2026, 8, 28), new Date(2026, 9, 5)].map(
+        (weekStart) =>
+          engine.computePlan(
+            input({ weekStart, settings: defaultSettings({ schedules: [{ ...schedule, repeat: 'monthly', weekOfMonth }] }) }),
+          ).creations.map((creation) => creation.started),
+      );
+
+    // September 2026's Tuesdays are the 1st, 8th, 15th, 22nd and 29th; October's start on the 6th.
+    expect(weeks(1)).toEqual([[], [], [new Date(2026, 9, 6, 11).toISOString()]]);
+    expect(weeks(4)).toEqual([[new Date(2026, 8, 22, 11).toISOString()], [], []]);
+    expect(weeks(-1)).toEqual([[], [new Date(2026, 8, 29, 11).toISOString()], []]);
   });
 
   it("re-plans its own worklogs when the allocations change after a sync, and keeps everyone else's", () => {

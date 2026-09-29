@@ -11,6 +11,8 @@ const SETTINGS_KEY = 'jira-timesheets:settings';
 const CREDENTIALS_KEY = 'jira-timesheets:credentials';
 const GITHUB_KEY = 'jira-timesheets:github';
 export const DEFAULT_GITHUB_API_URL = 'https://api.github.com';
+/** Allocations on issues starting with these are scattered through the week unless changed. */
+export const DEFAULT_SPREAD_PREFIXES = ['MT'];
 
 const DEFAULT_SETTINGS: UserSettings = {
   startTime: '09:00',
@@ -19,6 +21,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   workDays: [1, 2, 3, 4, 5],
   allocations: [],
   schedules: [],
+  spreadPrefixes: DEFAULT_SPREAD_PREFIXES,
   weekAllocations: {},
   leaveIssueKey: '',
   placeholderIssueKey: '',
@@ -35,6 +38,7 @@ function defaultSettings(): UserSettings {
     workDays: [...DEFAULT_SETTINGS.workDays],
     allocations: [],
     schedules: [],
+    spreadPrefixes: [...DEFAULT_SPREAD_PREFIXES],
     githubOrgs: [],
     weekAllocations: {},
   };
@@ -165,6 +169,11 @@ export class SettingsService {
     }
     if (Array.isArray(raw['schedules'])) {
       settings.schedules = raw['schedules'] as RecurringSchedule[];
+    }
+    if (Array.isArray(raw['spreadPrefixes'])) {
+      settings.spreadPrefixes = raw['spreadPrefixes'].filter(
+        (value): value is string => typeof value === 'string',
+      );
     }
     if (isRecord(raw['weekAllocations'])) {
       for (const [week, allocations] of Object.entries(raw['weekAllocations'])) {

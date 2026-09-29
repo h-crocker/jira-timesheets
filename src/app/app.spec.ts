@@ -157,6 +157,36 @@ describe('App (smart component)', () => {
     expect(TestBed.inject(SettingsService).settings().schedules.length).toBe(1);
   });
 
+  it('shows a fortnightly schedule added via the panel this week and not the next', async () => {
+    const fixture = await create();
+    const q2 = (id: string) => q(fixture, id) as HTMLInputElement;
+    const type = (id: string, value: string) => {
+      q2(id).value = value;
+      q2(id).dispatchEvent(new Event('input'));
+    };
+
+    type('sched-issue-key', 'GWP-101');
+    type('sched-summary', 'Sprint review');
+    q2('sched-weekday-3').click();
+    type('sched-start-time', '14:00');
+    type('sched-duration', '1');
+    q2('sched-repeat').value = 'fortnightly';
+    q2('sched-repeat').dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    expect(q2('sched-anchor-date').value).toBe('2026-09-28');
+    q(fixture, 'schedule-form').dispatchEvent(new Event('submit', { cancelable: true }));
+    await settle(fixture);
+
+    expect(rowsFor(fixture, 'GWP-101', '[data-date="2026-09-30"]').length).toBe(1);
+    expect(q(fixture, 'schedule-repeat').textContent).toContain('every other week from Sep 28');
+    q(fixture, 'next-week').click();
+    await settle(fixture);
+    expect(rowsFor(fixture, 'GWP-101').length).toBe(0);
+    q(fixture, 'next-week').click();
+    await settle(fixture);
+    expect(rowsFor(fixture, 'GWP-101', '[data-date="2026-10-14"]').length).toBe(1);
+  });
+
   it('percentage allocations fill the remaining capacity in the grid', async () => {
     const fixture = await create((settings) =>
       settings.addAllocation({ id: 'a', issueKey: 'GWP-200', summary: 'Project', percentage: 100 }),

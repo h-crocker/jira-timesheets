@@ -142,6 +142,16 @@
           </li>
         }
       </ul>
+      @if (allocationOrder().blocks.length > 0 || allocationOrder().spread.length > 0) {
+        <p class="hint" data-testid="allocations-order">
+          @if (allocationOrder().blocks.length > 0) {
+            Logged one after another in blocks: {{ allocationOrder().blocks.join(', ') }}.
+          }
+          @if (allocationOrder().spread.length > 0) {
+            Scattered through the week: {{ allocationOrder().spread.join(', ') }}.
+          }
+        </p>
+      }
       @if (allocationTotal() > 100) {
         <p class="hint" data-testid="allocations-total">
           These add up to {{ allocationTotal() }}%, so each gets its share of the week in proportion.
@@ -173,6 +183,20 @@
         </button>
       }
     </div>
+    <label class="field">
+      <span>Scatter tickets starting with</span>
+      <input
+        data-testid="spread-prefixes"
+        [value]="spreadPrefixesText()"
+        (change)="changeSpreadPrefixes($event)"
+        placeholder="e.g. MT, OPS"
+      />
+    </label>
+    <p class="hint">
+      Allocations on these tickets are logged a little at a time all through the week. Every other
+      allocation is logged in one block, so one task follows another. Leave empty to log everything
+      in blocks.
+    </p>
     <form class="add-form" data-testid="allocation-form" (submit)="addAllocation($event)">
       <input
         data-testid="alloc-issue-key"
@@ -211,6 +235,7 @@
             <span class="summary">{{ schedule.summary }}</span>
             <span class="weekdays">{{ schedule.weekdays.map(d => weekdayNames[d - 1]).join(', ') }}</span>
             <span class="time">{{ schedule.startTime }} · {{ schedule.durationSeconds / 3600 }}h</span>
+            <span class="repeat" data-testid="schedule-repeat">{{ repeatLabel(schedule) }}</span>
             <button
               type="button"
               class="remove-button"
@@ -264,6 +289,40 @@
         (input)="onSchedDurationInput($event)"
         placeholder="Duration (hours)"
       />
+      <label class="repeat-picker">
+        <span>Repeats</span>
+        <select data-testid="sched-repeat" [value]="schedRepeat()" (change)="onSchedRepeatInput($event)">
+          <option value="weekly">every week</option>
+          <option value="fortnightly">every other week</option>
+          <option value="monthly">monthly</option>
+        </select>
+      </label>
+      @if (schedRepeat() === 'fortnightly') {
+        <label class="repeat-picker">
+          <span>In the week of</span>
+          <input
+            type="date"
+            data-testid="sched-anchor-date"
+            [value]="effectiveSchedAnchorDate()"
+            (input)="onSchedAnchorDateInput($event)"
+          />
+        </label>
+      }
+      @if (schedRepeat() === 'monthly') {
+        <label class="repeat-picker">
+          <span>On the</span>
+          <select
+            data-testid="sched-week-of-month"
+            [value]="schedWeekOfMonth()"
+            (change)="onSchedWeekOfMonthInput($event)"
+          >
+            @for (week of weeksOfMonth; track week.value) {
+              <option [value]="week.value">{{ week.label }}</option>
+            }
+          </select>
+          <span>of the ticked weekdays each month</span>
+        </label>
+      }
       <button type="submit">Add schedule</button>
     </form>
   </section>
