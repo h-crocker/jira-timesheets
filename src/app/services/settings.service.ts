@@ -1,5 +1,6 @@
 import { Injectable, signal } from '@angular/core';
 import type {
+  GithubCredentials,
   JiraCredentials,
   PercentageAllocation,
   RecurringSchedule,
@@ -8,6 +9,8 @@ import type {
 
 const SETTINGS_KEY = 'jira-timesheets:settings';
 const CREDENTIALS_KEY = 'jira-timesheets:credentials';
+const GITHUB_KEY = 'jira-timesheets:github';
+export const DEFAULT_GITHUB_API_URL = 'https://api.github.com';
 
 const DEFAULT_SETTINGS: UserSettings = {
   startTime: '09:00',
@@ -15,6 +18,10 @@ const DEFAULT_SETTINGS: UserSettings = {
   workDays: [1, 2, 3, 4, 5],
   allocations: [],
   schedules: [],
+  activityMode: false,
+  leaveIssueKey: '',
+  placeholderIssueKey: '',
+  githubOrgs: [],
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -27,6 +34,7 @@ function defaultSettings(): UserSettings {
     workDays: [...DEFAULT_SETTINGS.workDays],
     allocations: [],
     schedules: [],
+    githubOrgs: [],
   };
 }
 
@@ -34,6 +42,7 @@ function defaultSettings(): UserSettings {
 export class SettingsService {
   readonly settings = signal<UserSettings>(this.loadSettings());
   readonly credentials = signal<JiraCredentials | null>(this.loadCredentials());
+  readonly githubCredentials = signal<GithubCredentials | null>(this.loadGithubCredentials());
 
   updateSettings(partial: Partial<UserSettings>): void {
     this.settings.update((current) => ({ ...current, ...partial }));
@@ -90,6 +99,16 @@ export class SettingsService {
     localStorage.removeItem(CREDENTIALS_KEY);
   }
 
+  setGithubCredentials(credentials: GithubCredentials): void {
+    this.githubCredentials.set(credentials);
+    localStorage.setItem(GITHUB_KEY, JSON.stringify(credentials));
+  }
+
+  clearGithubCredentials(): void {
+    this.githubCredentials.set(null);
+    localStorage.removeItem(GITHUB_KEY);
+  }
+
   private loadSettings(): UserSettings {
     const raw = this.readJson(SETTINGS_KEY);
     if (!isRecord(raw)) {
@@ -113,6 +132,20 @@ export class SettingsService {
     if (Array.isArray(raw['schedules'])) {
       settings.schedules = raw['schedules'] as RecurringSchedule[];
     }
+    if (typeof raw['activityMode'] === 'boolean') {
+      settings.activityMode = raw['activityMode'];
+    }
+    if (typeof raw['leaveIssueKey'] === 'string') {
+      settings.leaveIssueKey = raw['leaveIssueKey'];
+    }
+    if (typeof raw['placeholderIssueKey'] === 'string') {
+      settings.placeholderIssueKey = raw['placeholderIssueKey'];
+    }
+    if (Array.isArray(raw['githubOrgs'])) {
+      settings.githubOrgs = raw['githubOrgs'].filter(
+        (value): value is string => typeof value === 'string',
+      );
+    }
     return settings;
   }
 
@@ -125,6 +158,14 @@ export class SettingsService {
       typeof raw['host'] === 'string'
     ) {
       return { email: raw['email'], apiToken: raw['apiToken'], host: raw['host'] };
+    }
+    return null;
+  }
+
+  private loadGithubCredentials(): GithubCredentials | null {
+    const raw = this.readJson(GITHUB_KEY);
+    if (isRecord(raw) && typeof raw['token'] === 'string' && typeof raw['apiUrl'] === 'string') {
+      return { token: raw['token'], apiUrl: raw['apiUrl'] };
     }
     return null;
   }

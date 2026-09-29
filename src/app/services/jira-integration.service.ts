@@ -9,6 +9,9 @@ const PAGE_SIZE = 50;
 /** Worklog property that marks the worklogs this app created. */
 const GENERATED_PROPERTY_KEY = 'jira-timesheets';
 const GENERATED_PROPERTY_VALUE = { generated: true, version: 1 };
+/** User property, one per week, holding copies of the worklogs the app replaced. */
+const REPLACED_PROPERTY_PREFIX = 'jira-timesheets.replaced.';
+const BULK_FETCH_SIZE = 100;
 // ADF nodes whose children are inline text rather than blocks.
 const INLINE_PARENTS = new Set<unknown>(['paragraph', 'heading', 'codeBlock']);
 
@@ -61,11 +64,51 @@ function addDays(date: Date, days: number): Date {
   return result;
 }
 
+function httpStatus(error: unknown): number | undefined {
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === 'number' ? status : undefined;
+}
+
+/** The worklogs stored in a week's replaced-worklogs property, skipping anything malformed. */
+function parseReplaced(value: unknown): JiraWorklog[] {
+  const worklogs = (value as { worklogs?: unknown } | null)?.worklogs;
+  if (!Array.isArray(worklogs)) {
+    return [];
+  }
+  return worklogs.flatMap((item): JiraWorklog[] => {
+    const { id, issueKey, started, timeSpentSeconds, comment } = (item ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const date = typeof started === 'string' ? new Date(started) : null;
+    if (
+      typeof id !== 'string' ||
+      typeof issueKey !== 'string' ||
+      date === null ||
+      Number.isNaN(date.getTime()) ||
+      typeof timeSpentSeconds !== 'number'
+    ) {
+      return [];
+    }
+    return [
+      {
+        id,
+        issueKey,
+        started: date,
+        timeSpentSeconds,
+        generated: false,
+        ...(typeof comment === 'string' ? { comment } : {}),
+      },
+    ];
+  });
+}
+
 @Injectable({ providedIn: 'root' })
 export class JiraIntegrationService {
   private readonly relayUrl = inject(JIRA_RELAY_URL);
   private client: CloudClient | null = null;
   private clientKey: string | null = null;
+  private accountId: Promise<string> | null = null;
 
   constructor(private readonly settingsService: SettingsService) {}
 
@@ -74,14 +117,10 @@ export class JiraIntegrationService {
    * user's worklogs, plus `issueKeys`, since search results can lag behind worklogs just written.
    */
   async fetchMyWorklogs(from: Date, to: Date, issueKeys: string[] = []): Promise<JiraWorklog[]> {
-    const client = this.getClient();
-    const [{ accountId }, found] = await Promise.all([
-      client.myself.getCurrentUser(),
+    const [accountId, found] = await Promise.all([
+      this.currentAccountId(),
       this.findIssuesWithMyWorklogs(from, to),
     ]);
-    if (accountId === undefined) {
-      throw new Error('Jira did not identify the current user');
-    }
     const keys = [...new Set([...found, ...issueKeys])];
     const results = await Promise.all(
       keys.map((key) => this.fetchIssueWorklogs(key, from, to, accountId)),
@@ -116,6 +155,90 @@ export class JiraIntegrationService {
   refreshClient(): void {
     this.client = null;
     this.clientKey = null;
+    this.accountId = null;
+  }
+
+  /** Copies of the automatic worklogs that syncs of this week replaced. */
+  async fetchReplaced(weekStart: Date): Promise<JiraWorklog[]> {
+    const client = this.getClient();
+    const accountId = await this.currentAccountId();
+    try {
+      const property = await client.userProperties.getUserProperty({
+        accountId,
+        propertyKey: REPLACED_PROPERTY_PREFIX + jqlDate(weekStart),
+      });
+      return parseReplaced(property.value);
+    } catch (error) {
+      if (httpStatus(error) === 404) {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  /** Adds copies of `worklogs` to this week's replaced worklogs, before they are deleted. */
+  async saveReplaced(weekStart: Date, worklogs: JiraWorklog[]): Promise<void> {
+    if (worklogs.length === 0) {
+      return;
+    }
+    const merged = new Map(
+      (await this.fetchReplaced(weekStart)).map((worklog) => [worklog.id, worklog]),
+    );
+    for (const worklog of worklogs) {
+      merged.set(worklog.id, worklog);
+    }
+    await this.getClient().userProperties.setUserProperty({
+      accountId: await this.currentAccountId(),
+      propertyKey: REPLACED_PROPERTY_PREFIX + jqlDate(weekStart),
+      body: {
+        version: 1,
+        worklogs: [...merged.values()].map((worklog) => ({
+          id: worklog.id,
+          issueKey: worklog.issueKey,
+          started: worklog.started.toISOString(),
+          timeSpentSeconds: worklog.timeSpentSeconds,
+          ...(worklog.comment === undefined ? {} : { comment: worklog.comment }),
+        })),
+      },
+    });
+  }
+
+  /** Summaries of the issues that exist, by key. Keys Jira doesn't know are left out. */
+  async fetchIssueSummaries(keys: string[]): Promise<Map<string, string>> {
+    const client = this.getClient();
+    const unique = [...new Set(keys)];
+    const summaries = new Map<string, string>();
+    for (let i = 0; i < unique.length; i += BULK_FETCH_SIZE) {
+      const result = await client.issues.bulkFetchIssues({
+        issueIdsOrKeys: unique.slice(i, i + BULK_FETCH_SIZE),
+        fields: ['summary'],
+      });
+      for (const issue of result.issues ?? []) {
+        if (issue.key !== undefined) {
+          const summary = (issue.fields as { summary?: unknown } | undefined)?.summary;
+          summaries.set(issue.key, typeof summary === 'string' ? summary : issue.key);
+        }
+      }
+    }
+    return summaries;
+  }
+
+  private currentAccountId(): Promise<string> {
+    // getClient() forgets the account when the credentials change.
+    const client = this.getClient();
+    this.accountId ??= client.myself.getCurrentUser().then(({ accountId }) => {
+      if (accountId === undefined) {
+        throw new Error('Jira did not identify the current user');
+      }
+      return accountId;
+    });
+    const pending = this.accountId;
+    pending.catch(() => {
+      if (this.accountId === pending) {
+        this.accountId = null;
+      }
+    });
+    return pending;
   }
 
   private async findIssuesWithMyWorklogs(from: Date, to: Date): Promise<string[]> {
@@ -186,6 +309,7 @@ export class JiraIntegrationService {
     if (this.client !== null && this.clientKey === key) {
       return this.client;
     }
+    this.accountId = null;
     this.client = createCloudClient({
       host: this.relayUrl ?? site,
       ...(this.relayUrl === null ? {} : { headers: { 'X-Jira-Host': site } }),

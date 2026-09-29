@@ -19,6 +19,10 @@ function defaultSettings(overrides: Partial<UserSettings> = {}): UserSettings {
     workDays: [1, 2, 3, 4, 5],
     allocations: [],
     schedules: [],
+    activityMode: false,
+    leaveIssueKey: '',
+    placeholderIssueKey: '',
+    githubOrgs: [],
     ...overrides,
   };
 }
@@ -58,7 +62,7 @@ describe('TimesheetEngineService', () => {
   const engine = new TimesheetEngineService();
 
   it('returns an empty plan for empty input', () => {
-    expect(engine.computePlan(input())).toEqual({ deletions: [], creations: [] });
+    expect(engine.computePlan(input())).toEqual({ deletions: [], creations: [], absorb: [] });
   });
 
   it('creates one occurrence per scheduled weekday with exact times', () => {
@@ -310,7 +314,7 @@ describe('TimesheetEngineService', () => {
       ],
     });
 
-    expect(engine.computePlan(input({ settings }))).toEqual({ deletions: [], creations: [] });
+    expect(engine.computePlan(input({ settings }))).toEqual({ deletions: [], creations: [], absorb: [] });
   });
 
   it('keeps a worklog that already records a recurring event rather than re-creating it', () => {
@@ -398,7 +402,7 @@ describe('TimesheetEngineService', () => {
 
     expect(first.deletions.map((deletion) => deletion.worklogId)).toEqual(['w1']);
     const second = engine.computePlan(input({ settings, worklogs: synced }));
-    expect(second).toEqual({ deletions: [], creations: [] });
+    expect(second).toEqual({ deletions: [], creations: [], absorb: [] });
   });
 
   it('places an allocation that fits one day as a single chunk', () => {

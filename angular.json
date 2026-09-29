@@ -78,7 +78,8 @@
           "options": {
             "include": [
               "**/*.spec.ts",
-              "../mock-jira-server.spec.ts"
+              "../mock-jira-server.spec.ts",
+              "../mock-github-server.spec.ts"
             ]
           }
         }

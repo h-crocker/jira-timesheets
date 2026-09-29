@@ -1,6 +1,8 @@
 import * as http from 'node:http';
 import {
+  BulkIssueResultsSchema,
   DashboardUserSchema,
+  EntityPropertySchema,
   PageOfWorklogsSchema,
   SearchAndReconcileResultsSchema,
   WorklogSchema,
@@ -45,7 +47,7 @@ describe('mock Jira server', () => {
     expect(response.headers.get('content-type')).toBe('application/json');
     expect(PageOfWorklogsSchema.safeParse(body).error).toBeUndefined();
 
-    expect(body.total).toBe(3);
+    expect(body.total).toBe(4);
     const devWorklog = body.worklogs.find(
       (worklog: { started: string }) => worklog.started === '2026-09-28T09:00:00.000+0000',
     );
@@ -167,7 +169,7 @@ describe('mock Jira server', () => {
     expect(byId.get(created.id)).toEqual(properties);
     expect(
       [...byId.values()].filter((value) => Array.isArray(value) && value.length === 0),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
   });
 
   it('POST rejects properties without a key or a value', async () => {
@@ -256,6 +258,7 @@ describe('mock Jira server', () => {
     expect(dev.body.issues.map((issue: { key: string }) => issue.key)).toEqual([
       'GWP-2070',
       'GWP-2080',
+      'HR-1',
     ]);
     expect(dev.body.isLast).toBe(true);
 
@@ -281,10 +284,43 @@ describe('mock Jira server', () => {
       `/rest/api/3/search/jql?jql=worklogAuthor%3DcurrentUser()&maxResults=1&nextPageToken=${first.nextPageToken}`,
     );
     expect(second.body.issues.map((issue: { key: string }) => issue.key)).toEqual(['GWP-2080']);
-    expect(second.body.isLast).toBe(true);
+    expect(second.body.isLast).toBe(false);
 
     expect((await getJson('/rest/api/3/search/jql?jql=project%20%3D%20GWP')).response.status).toBe(
       400,
+    );
+  });
+
+  it('bulk fetch returns the issues that exist and an error for each that does not', async () => {
+    const response = await fetch(`${base}/rest/api/3/issue/bulkfetch`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ issueIdsOrKeys: ['GWP-2070', 'NOPE-1'], fields: ['summary'] }),
+    });
+    const body = await response.json();
+    expect(BulkIssueResultsSchema.safeParse(body).error).toBeUndefined();
+    expect(
+      body.issues.map((issue: { key: string; fields: object }) => [issue.key, issue.fields]),
+    ).toEqual([['GWP-2070', { summary: 'Rate limiting for the public API' }]]);
+    expect(body.issueErrors.map((error: { id: string }) => error.id)).toEqual(['NOPE-1']);
+  });
+
+  it('stores user properties for the caller only', async () => {
+    const path =
+      '/rest/api/3/user/properties/jira-timesheets.test?accountId=5d1f0f3c8e1a2b0c7a9d0001';
+    expect((await getJson(path)).response.status).toBe(404);
+
+    const put = (value: unknown, headers = JSON_HEADERS) =>
+      fetch(`${base}${path}`, { method: 'PUT', headers, body: JSON.stringify(value) });
+    expect((await put({ n: 1 })).status).toBe(201);
+    expect((await put({ n: 2 })).status).toBe(200);
+    const { response, body } = await getJson(path);
+    expect(response.status).toBe(200);
+    expect(EntityPropertySchema.safeParse(body).error).toBeUndefined();
+    expect(body).toEqual({ key: 'jira-timesheets.test', value: { n: 2 } });
+
+    expect((await put({ n: 3 }, { ...COLLEAGUE, 'Content-Type': 'application/json' })).status).toBe(
+      403,
     );
   });
 

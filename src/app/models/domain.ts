@@ -5,8 +5,10 @@ export interface CalendarEvent {
   start: Date;
   end: Date;
   timeSpentSeconds: number;
-  source: 'jira' | 'recurring' | 'allocated';
+  source: 'jira' | 'recurring' | 'allocated' | 'activity' | 'leave';
   worklogId?: string;
+  /** An existing worklog the plan deletes. */
+  pendingDeletion?: boolean;
 }
 
 export interface RecurringSchedule {
@@ -32,6 +34,20 @@ export interface UserSettings {
   workDays: number[];
   allocations: PercentageAllocation[];
   schedules: RecurringSchedule[];
+  /** Fill the week from GitHub and Jira activity, replacing the worklogs Jira added automatically. */
+  activityMode: boolean;
+  /** The ticket leave is logged to. Worklogs on it are never replaced. */
+  leaveIssueKey: string;
+  /** Generic work ticket for pull requests with no Jira key, and weeks with no activity. */
+  placeholderIssueKey: string;
+  /** Only look at pull requests in these GitHub organisations; empty means all. */
+  githubOrgs: string[];
+}
+
+export interface GithubCredentials {
+  token: string;
+  /** REST API base, e.g. https://api.github.com. */
+  apiUrl: string;
 }
 
 export interface JiraCredentials {
@@ -58,6 +74,8 @@ export interface WorklogCreation {
 export interface ExecutionPlan {
   deletions: WorklogDeletion[];
   creations: WorklogCreation[];
+  /** Worklogs being replaced, to be remembered as evidence before they are deleted. */
+  absorb: JiraWorklog[];
 }
 
 export interface JiraWorklog {
@@ -70,8 +88,50 @@ export interface JiraWorklog {
   generated: boolean;
 }
 
+export type ActivityKind =
+  'pr-opened' | 'commit' | 'review' | 'comment' | 'pr-merged' | 'jira-worklog';
+
+/** Something that shows work on an issue at a point in time. */
+export interface ActivityEvent {
+  /** Stable, e.g. 'gh:acme/api#41:commit:<sha>' or 'jira:<worklogId>'. */
+  id: string;
+  issueKey: string;
+  at: Date;
+  kind: ActivityKind;
+  /** Shown in the UI and used in worklog comments, e.g. 'acme/api#41 Add rate limiting'. */
+  label: string;
+  url?: string;
+  /** Fraction of the event's weight, when one pull request names several issues. Defaults to 1. */
+  share?: number;
+}
+
 export interface EngineInput {
   weekStart: Date;
   settings: UserSettings;
   worklogs: JiraWorklog[];
+  /** Evidence from GitHub (activity mode). */
+  activity?: ActivityEvent[];
+  /** Automatic worklogs replaced by earlier syncs (activity mode). */
+  absorbed?: JiraWorklog[];
+  /** Weekdays marked as leave, 1 = Monday, as in `workDays`. */
+  leaveDays?: number[];
+  /** Activity mode leaves days after this one alone. Defaults to the end of the week. */
+  now?: Date;
+}
+
+/** One issue the week's evidence points at, as the activity panel shows it. */
+export interface ActivityIssueSummary {
+  issueKey: string;
+  summary: string;
+  /** Time on the issue once the plan is synced. */
+  plannedSeconds: number;
+  pullRequests: Array<{ name: string; url?: string; actions: number }>;
+  jiraWorklogs: number;
+}
+
+/** A pull request with no Jira key, whose work goes to the placeholder ticket (if set). */
+export interface UnkeyedPullRequest {
+  name: string;
+  title: string;
+  url: string;
 }

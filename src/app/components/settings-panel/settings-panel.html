@@ -43,6 +43,58 @@
   </section>
 
   <section class="section">
+    <h2>Activity</h2>
+    <label class="toggle">
+      <input
+        type="checkbox"
+        data-testid="activity-mode"
+        [checked]="effectiveActivityMode()"
+        (change)="toggleActivityMode()"
+      />
+      Fill my week from activity
+    </label>
+    <p class="hint">
+      Splits each day between the issues you worked on, from GitHub and Jira's automatic worklogs,
+      and replaces those automatic worklogs.
+    </p>
+    <label class="field">
+      <span>Leave ticket</span>
+      <input
+        data-testid="leave-issue-key"
+        [value]="effectiveLeaveIssueKey()"
+        (input)="onLeaveIssueKeyInput($event)"
+        placeholder="e.g. HR-1"
+      />
+    </label>
+    <label class="field">
+      <span>Placeholder ticket</span>
+      <input
+        data-testid="placeholder-issue-key"
+        [value]="effectivePlaceholderIssueKey()"
+        (input)="onPlaceholderIssueKeyInput($event)"
+        placeholder="For work with no Jira key"
+      />
+    </label>
+    <label class="field">
+      <span>GitHub organisations (optional)</span>
+      <input
+        data-testid="github-orgs"
+        [value]="effectiveGithubOrgs()"
+        (input)="onGithubOrgsInput($event)"
+        placeholder="All organisations"
+      />
+    </label>
+    <button
+      type="button"
+      class="save-button"
+      data-testid="save-activity-settings"
+      (click)="saveActivitySettings()"
+    >
+      Save
+    </button>
+  </section>
+
+  <section class="section">
     <h2>Allocations</h2>
     @if (settings().allocations.length === 0) {
       <p class="empty">No allocations</p>
@@ -187,6 +239,37 @@
     </form>
     <button type="button" class="clear-button" data-testid="clear-credentials" (click)="clearCredentials()">
       Clear credentials
+    </button>
+  </section>
+
+  <section class="section">
+    <h2>GitHub</h2>
+    <p class="hint">
+      A read-only token for your pull requests. Stored locally and only sent to GitHub.
+    </p>
+    <form class="add-form" data-testid="github-form" (submit)="saveGithubCredentials($event)">
+      <input
+        type="password"
+        data-testid="github-token"
+        [value]="githubToken() ?? githubCredentials()?.token ?? ''"
+        (input)="onGithubTokenInput($event)"
+        placeholder="Token"
+      />
+      <input
+        data-testid="github-api-url"
+        [value]="githubApiUrl() ?? githubCredentials()?.apiUrl ?? ''"
+        (input)="onGithubApiUrlInput($event)"
+        placeholder="https://api.github.com"
+      />
+      <button type="submit">Save</button>
+    </form>
+    <button
+      type="button"
+      class="clear-button"
+      data-testid="clear-github"
+      (click)="clearGithubCredentials()"
+    >
+      Clear GitHub token
     </button>
   </section>
 </div>

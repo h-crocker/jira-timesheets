@@ -6,90 +6,40 @@ import type {
   WorklogCreation,
   WorklogDeletion,
 } from '../models/domain';
-
-const ROUNDING_INTERVAL_SECONDS = 900;
-
-interface Interval {
-  start: Date;
-  end: Date;
-}
-
-function addDays(date: Date, days: number): Date {
-  const result = new Date(date.getTime());
-  result.setDate(result.getDate() + days);
-  return result;
-}
-
-function timeOnDay(day: Date, time: string): Date {
-  const [hours = 0, minutes = 0] = time.split(':').map(Number);
-  const result = new Date(day.getTime());
-  result.setHours(hours, minutes, 0, 0);
-  return result;
-}
-
-function overlaps(a: Interval, b: Interval): boolean {
-  return a.start < b.end && b.start < a.end;
-}
-
-function sameMinute(a: Date, b: Date): boolean {
-  return Math.floor(a.getTime() / 60000) === Math.floor(b.getTime() / 60000);
-}
-
-function freeGaps(slot: Interval, occupied: Interval[]): Interval[] {
-  const relevant = occupied
-    .map((interval) => ({
-      start: new Date(Math.max(interval.start.getTime(), slot.start.getTime())),
-      end: new Date(Math.min(interval.end.getTime(), slot.end.getTime())),
-    }))
-    .filter((interval) => interval.start < interval.end)
-    .sort((a, b) => a.start.getTime() - b.start.getTime());
-
-  const gaps: Interval[] = [];
-  let cursor = slot.start;
-  for (const interval of relevant) {
-    if (interval.start > cursor) {
-      gaps.push({ start: cursor, end: interval.start });
-    }
-    if (interval.end > cursor) {
-      cursor = interval.end;
-    }
-  }
-  if (cursor < slot.end) {
-    gaps.push({ start: cursor, end: slot.end });
-  }
-  return gaps;
-}
+import { planFromActivity } from './activity-distribution';
+import { clashesWithLeave, planLeave } from './leave-planner';
+import {
+  BLOCK_SECONDS,
+  type Interval,
+  addDays,
+  daySlot,
+  durationSeconds,
+  freeGaps,
+  matchRecorded,
+  overlaps,
+  recurringEvents,
+} from './schedule-time';
 
 @Injectable({ providedIn: 'root' })
 export class TimesheetEngineService {
   computePlan(input: EngineInput): ExecutionPlan {
-    const { weekStart, settings, worklogs } = input;
-    const weekEnd = addDays(weekStart, 7);
+    return input.settings.activityMode ? planFromActivity(input) : this.planFromAllocations(input);
+  }
 
-    const recurringEvents: CalendarEvent[] = [];
-    for (const schedule of settings.schedules) {
-      if (!schedule.enabled) {
-        continue;
-      }
-      for (const weekday of schedule.weekdays) {
-        if (!settings.workDays.includes(weekday)) {
-          continue;
-        }
-        const start = timeOnDay(addDays(weekStart, weekday - 1), schedule.startTime);
-        recurringEvents.push({
-          id: `${schedule.id}-weekday-${weekday}`,
-          issueKey: schedule.issueKey,
-          summary: schedule.summary,
-          start,
-          end: new Date(start.getTime() + schedule.durationSeconds * 1000),
-          timeSpentSeconds: schedule.durationSeconds,
-          source: 'recurring',
-        });
-      }
-    }
+  /** Recurring events win over clashing worklogs, leave wins over both, allocations fill the rest. */
+  private planFromAllocations(input: EngineInput): ExecutionPlan {
+    const { weekStart, settings } = input;
+    const weekEnd = addDays(weekStart, 7);
+    const worklogs = input.worklogs.filter(
+      (worklog) => worklog.started >= weekStart && worklog.started < weekEnd,
+    );
+    const leave = planLeave(weekStart, settings, worklogs, input.leaveDays ?? []);
+    const recurringEventsThisWeek = recurringEvents(weekStart, settings).filter(
+      (event) => !clashesWithLeave(event, leave),
+    );
 
     const jiraEvents: CalendarEvent[] = worklogs
-      .filter((worklog) => worklog.started >= weekStart && worklog.started < weekEnd)
+      .filter((worklog) => !leave.handled.has(worklog.id))
       .map((worklog) => ({
         id: worklog.id,
         issueKey: worklog.issueKey,
@@ -103,64 +53,57 @@ export class TimesheetEngineService {
 
     // A worklog that already records a recurring event (same issue, start and duration) satisfies
     // it, so syncing again neither deletes it nor logs the event twice.
-    const recorded = new Set<string>();
-    const unrecordedEvents = recurringEvents.filter((recurring) => {
-      const record = jiraEvents.find(
-        (jiraEvent) =>
-          !recorded.has(jiraEvent.id) &&
-          jiraEvent.issueKey === recurring.issueKey &&
-          sameMinute(jiraEvent.start, recurring.start) &&
-          jiraEvent.timeSpentSeconds === recurring.timeSpentSeconds,
-      );
-      if (record !== undefined) {
-        recorded.add(record.id);
-      }
-      return record === undefined;
-    });
+    const { recorded, unrecorded } = matchRecorded(
+      recurringEventsThisWeek,
+      worklogs.filter((worklog) => !leave.handled.has(worklog.id)),
+    );
 
-    const deletions: WorklogDeletion[] = [];
+    const deletions: WorklogDeletion[] = [...leave.deletions];
     const keptJiraEvents: CalendarEvent[] = [];
     for (const jiraEvent of jiraEvents) {
       if (recorded.has(jiraEvent.id)) {
         continue;
       }
-      const clashesWithRecurring = recurringEvents.some((recurring) => overlaps(recurring, jiraEvent));
-      if (clashesWithRecurring) {
+      if (recurringEventsThisWeek.some((recurring) => overlaps(recurring, jiraEvent))) {
         deletions.push({
           worklogId: jiraEvent.worklogId ?? jiraEvent.id,
           issueKey: jiraEvent.issueKey,
           reason: 'overlap-with-recurring',
+        });
+      } else if (leave.intervals.some((interval) => overlaps(interval, jiraEvent))) {
+        deletions.push({
+          worklogId: jiraEvent.worklogId ?? jiraEvent.id,
+          issueKey: jiraEvent.issueKey,
+          reason: 'overlap-with-leave',
         });
       } else {
         keptJiraEvents.push(jiraEvent);
       }
     }
 
-    const creations: WorklogCreation[] = unrecordedEvents.map((event) => ({
-      issueKey: event.issueKey,
-      started: event.start.toISOString(),
-      timeSpentSeconds: event.timeSpentSeconds,
-      comment: event.summary,
-      source: 'recurring',
-    }));
+    const creations: WorklogCreation[] = [
+      ...leave.creations,
+      ...unrecorded.map((event): WorklogCreation => ({
+        issueKey: event.issueKey,
+        started: event.start.toISOString(),
+        timeSpentSeconds: event.timeSpentSeconds,
+        comment: event.summary,
+        source: 'recurring',
+      })),
+    ];
 
     const totalWeekCapacitySeconds = settings.workDays.length * settings.hoursPerDay * 3600;
-    const occupiedSeconds =
-      keptJiraEvents.reduce((sum, event) => sum + event.timeSpentSeconds, 0) +
-      recurringEvents.reduce((sum, event) => sum + event.timeSpentSeconds, 0);
+    const occupied: Interval[] = [
+      ...keptJiraEvents.map((event) => ({ start: event.start, end: event.end })),
+      ...recurringEventsThisWeek.map((event) => ({ start: event.start, end: event.end })),
+      ...leave.intervals,
+    ];
+    const occupiedSeconds = occupied.reduce((sum, interval) => sum + durationSeconds(interval), 0);
     const remaining = totalWeekCapacitySeconds - occupiedSeconds;
 
     if (remaining > 0) {
-      const occupied: Interval[] = [
-        ...keptJiraEvents.map((event) => ({ start: event.start, end: event.end })),
-        ...recurringEvents.map((event) => ({ start: event.start, end: event.end })),
-      ];
-
-      const daySlots: Interval[] = settings.workDays
-        .map((weekday) => {
-          const start = timeOnDay(addDays(weekStart, weekday - 1), settings.startTime);
-          return { start, end: new Date(start.getTime() + settings.hoursPerDay * 3600 * 1000) };
-        })
+      const daySlots = settings.workDays
+        .map((weekday) => daySlot(weekStart, weekday, settings))
         .sort((a, b) => a.start.getTime() - b.start.getTime());
 
       for (const allocation of settings.allocations) {
@@ -173,9 +116,8 @@ export class TimesheetEngineService {
             if (allocationRemaining <= 0) {
               break;
             }
-            const gapLengthSeconds = (gap.end.getTime() - gap.start.getTime()) / 1000;
-            const chunk = Math.min(allocationRemaining, gapLengthSeconds);
-            const rounded = Math.floor(chunk / ROUNDING_INTERVAL_SECONDS) * ROUNDING_INTERVAL_SECONDS;
+            const chunk = Math.min(allocationRemaining, durationSeconds(gap));
+            const rounded = Math.floor(chunk / BLOCK_SECONDS) * BLOCK_SECONDS;
             if (rounded <= 0) {
               continue;
             }
@@ -187,7 +129,10 @@ export class TimesheetEngineService {
               comment: allocation.summary,
               source: 'allocated',
             });
-            occupied.push({ start: chunkStart, end: new Date(chunkStart.getTime() + rounded * 1000) });
+            occupied.push({
+              start: chunkStart,
+              end: new Date(chunkStart.getTime() + rounded * 1000),
+            });
             allocationRemaining -= rounded;
           }
         }
@@ -195,6 +140,6 @@ export class TimesheetEngineService {
     }
 
     creations.sort((a, b) => a.started.localeCompare(b.started));
-    return { deletions, creations };
+    return { deletions, creations, absorb: [] };
   }
 }

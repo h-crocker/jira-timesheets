@@ -1,5 +1,6 @@
 import { Component, input, output, signal } from '@angular/core';
 import type {
+  GithubCredentials,
   JiraCredentials,
   PercentageAllocation,
   RecurringSchedule,
@@ -7,6 +8,12 @@ import type {
 } from '../../models/domain';
 
 const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+const DEFAULT_GITHUB_API_URL = 'https://api.github.com';
+
+export type ActivitySettingsChange = Pick<
+  UserSettings,
+  'activityMode' | 'leaveIssueKey' | 'placeholderIssueKey' | 'githubOrgs'
+>;
 
 @Component({
   selector: 'app-settings-panel',
@@ -16,6 +23,7 @@ const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 export class SettingsPanelComponent {
   settings = input.required<UserSettings>();
   credentials = input<JiraCredentials | null>(null);
+  githubCredentials = input<GithubCredentials | null>(null);
 
   workHoursChanged = output<{ startTime: string; hoursPerDay: number; workDays: number[] }>();
   allocationAdded = output<PercentageAllocation>();
@@ -23,6 +31,8 @@ export class SettingsPanelComponent {
   scheduleAdded = output<RecurringSchedule>();
   scheduleRemoved = output<string>();
   credentialsChanged = output<JiraCredentials | null>();
+  activitySettingsChanged = output<ActivitySettingsChange>();
+  githubCredentialsChanged = output<GithubCredentials | null>();
 
   protected readonly weekdayNames = WEEKDAY_NAMES;
 
@@ -39,6 +49,14 @@ export class SettingsPanelComponent {
   protected readonly schedWeekdays = signal<number[]>([]);
   protected readonly schedStartTime = signal('');
   protected readonly schedDurationHours = signal(0);
+
+  protected readonly activityMode = signal<boolean | null>(null);
+  protected readonly leaveIssueKey = signal<string | null>(null);
+  protected readonly placeholderIssueKey = signal<string | null>(null);
+  protected readonly githubOrgs = signal<string | null>(null);
+
+  protected readonly githubToken = signal<string | null>(null);
+  protected readonly githubApiUrl = signal<string | null>(null);
 
   protected readonly credEmail = signal<string | null>(null);
   protected readonly credToken = signal<string | null>(null);
@@ -161,6 +179,72 @@ export class SettingsPanelComponent {
 
   protected removeSchedule(id: string): void {
     this.scheduleRemoved.emit(id);
+  }
+
+  protected effectiveActivityMode(): boolean {
+    return this.activityMode() ?? this.settings().activityMode;
+  }
+
+  protected effectiveLeaveIssueKey(): string {
+    return this.leaveIssueKey() ?? this.settings().leaveIssueKey;
+  }
+
+  protected effectivePlaceholderIssueKey(): string {
+    return this.placeholderIssueKey() ?? this.settings().placeholderIssueKey;
+  }
+
+  protected effectiveGithubOrgs(): string {
+    return this.githubOrgs() ?? this.settings().githubOrgs.join(', ');
+  }
+
+  protected toggleActivityMode(): void {
+    this.activityMode.set(!this.effectiveActivityMode());
+  }
+
+  protected onLeaveIssueKeyInput(event: Event): void {
+    this.leaveIssueKey.set((event.target as HTMLInputElement).value);
+  }
+
+  protected onPlaceholderIssueKeyInput(event: Event): void {
+    this.placeholderIssueKey.set((event.target as HTMLInputElement).value);
+  }
+
+  protected onGithubOrgsInput(event: Event): void {
+    this.githubOrgs.set((event.target as HTMLInputElement).value);
+  }
+
+  protected saveActivitySettings(): void {
+    this.activitySettingsChanged.emit({
+      activityMode: this.effectiveActivityMode(),
+      leaveIssueKey: this.effectiveLeaveIssueKey().trim(),
+      placeholderIssueKey: this.effectivePlaceholderIssueKey().trim(),
+      githubOrgs: this.effectiveGithubOrgs()
+        .split(/[\s,]+/)
+        .filter((org) => org !== ''),
+    });
+  }
+
+  protected onGithubTokenInput(event: Event): void {
+    this.githubToken.set((event.target as HTMLInputElement).value);
+  }
+
+  protected onGithubApiUrlInput(event: Event): void {
+    this.githubApiUrl.set((event.target as HTMLInputElement).value);
+  }
+
+  protected saveGithubCredentials(event: Event): void {
+    event.preventDefault();
+    const apiUrl = (this.githubApiUrl() ?? this.githubCredentials()?.apiUrl ?? '').trim();
+    this.githubCredentialsChanged.emit({
+      token: (this.githubToken() ?? this.githubCredentials()?.token ?? '').trim(),
+      apiUrl: apiUrl === '' ? DEFAULT_GITHUB_API_URL : apiUrl,
+    });
+  }
+
+  protected clearGithubCredentials(): void {
+    this.githubToken.set(null);
+    this.githubApiUrl.set(null);
+    this.githubCredentialsChanged.emit(null);
   }
 
   protected onCredEmailInput(event: Event): void {

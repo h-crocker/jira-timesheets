@@ -1,0 +1,50 @@
+<section class="activity-panel" data-testid="activity-panel">
+  <h2>What you worked on</h2>
+  @for (warning of warnings(); track warning) {
+    <p class="warning" data-testid="activity-warning">{{ warning }}</p>
+  }
+  @if (issues().length === 0) {
+    <p class="empty">No activity found this week.</p>
+  } @else {
+    <ul class="issues">
+      @for (issue of issues(); track issue.issueKey) {
+        <li class="issue" [attr.data-testid]="'activity-' + issue.issueKey">
+          <div class="issue-line">
+            <span class="issue-key">{{ issue.issueKey }}</span>
+            <span class="summary">{{ issue.summary }}</span>
+            <span class="hours" data-testid="planned-hours">{{ hours(issue.plannedSeconds) }}</span>
+          </div>
+          <div class="evidence">
+            @for (pull of issue.pullRequests; track pull.name) {
+              @if (pull.url) {
+                <a class="chip" [href]="pull.url" target="_blank" rel="noopener">
+                  {{ pull.name }} · {{ plural(pull.actions, 'action') }}
+                </a>
+              } @else {
+                <span class="chip">{{ pull.name }} · {{ plural(pull.actions, 'action') }}</span>
+              }
+            }
+            @if (issue.jiraWorklogs > 0) {
+              <span class="chip jira">{{ plural(issue.jiraWorklogs, 'automatic worklog') }}</span>
+            }
+          </div>
+        </li>
+      }
+    </ul>
+  }
+  @if (unkeyedPullRequests().length > 0) {
+    <h3>
+      Pull requests with no Jira key
+      @if (placeholderIssueKey()) {
+        <span class="to">→ {{ placeholderIssueKey() }}</span>
+      }
+    </h3>
+    <ul class="unkeyed">
+      @for (pull of unkeyedPullRequests(); track pull.name) {
+        <li data-testid="unkeyed-pull-request">
+          <a [href]="pull.url" target="_blank" rel="noopener">{{ pull.name }}</a> {{ pull.title }}
+        </li>
+      }
+    </ul>
+  }
+</section>

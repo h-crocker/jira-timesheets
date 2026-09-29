@@ -59,6 +59,15 @@ const DEFAULT_SEARCH_PAGE_SIZE = 50;
 const JIRA_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{4}$/;
 const MAX_PROPERTY_KEY_LENGTH = 255;
 const AVATAR = 'https://example.com/avatar.png';
+// Issues that exist before anyone logs work on them, with their summaries. Logging work on any other
+// key creates that issue.
+const ISSUE_SUMMARIES: Record<string, string> = {
+  'GWP-100': 'General development',
+  'GWP-1999': 'Rate limiting design',
+  'GWP-2070': 'Rate limiting for the public API',
+  'GWP-2080': 'Login fails for SSO users',
+  'HR-1': 'Annual leave',
+};
 
 let worklogIdCounter = 10001;
 let userIdCounter = 100;
@@ -66,7 +75,17 @@ const issueIds = new Map<string, string>();
 const worklogStore = new Map<string, StoredWorklog[]>();
 const usersByEmail = new Map<string, MockUser>();
 const usersById = new Map<string, MockUser>();
+// User properties by account id, then property key.
+const userProperties = new Map<string, Map<string, unknown>>();
 let activeServer: Server | null = null;
+
+function issueExists(issueKey: string): boolean {
+  return issueIds.has(issueKey) || issueKey in ISSUE_SUMMARIES;
+}
+
+function summaryOf(issueKey: string): string {
+  return ISSUE_SUMMARIES[issueKey] ?? `Summary of ${issueKey}`;
+}
 
 function issueIdFor(issueKey: string): string {
   let issueId = issueIds.get(issueKey);
@@ -199,6 +218,7 @@ function resetMockJira(): void {
   worklogStore.clear();
   usersByEmail.clear();
   usersById.clear();
+  userProperties.clear();
   registerUser(DEV_USER);
   registerUser(COLLEAGUE);
 
@@ -212,6 +232,11 @@ function resetMockJira(): void {
     "Colleague's pairing session",
   );
   addWorklog('GWP-2080', DEV_USER, new Date('2026-09-30T14:00:00Z'), 3600, 'Support ticket');
+  // What a Jira automation adds when an issue moves to Done: short, and in the user's name.
+  addWorklog('GWP-2080', DEV_USER, new Date('2026-09-29T15:00:00Z'), 900, 'Logged on Done');
+  addWorklog('GWP-2070', DEV_USER, new Date('2026-10-01T15:00:00Z'), 900, 'Logged on Done');
+  // A morning of leave, logged by hand.
+  addWorklog('HR-1', DEV_USER, new Date('2026-10-02T09:00:00Z'), 13500, 'Leave (morning)');
 }
 
 function renderUser(base: string, version: ApiVersion, user: MockUser): object {
@@ -413,7 +438,7 @@ async function handleSearch(
       id: issueIdFor(key),
       self: `${base}/rest/api/3/issue/${issueIdFor(key)}`,
       key,
-      fields: wantsSummary ? { summary: `Summary of ${key}` } : {},
+      fields: wantsSummary ? { summary: summaryOf(key) } : {},
     })),
     isLast,
     ...(isLast ? {} : { nextPageToken: String(offset + pageSize) }),
@@ -538,6 +563,74 @@ async function handleWorklogs(
   sendErrors(res, 404, ['Not found']);
 }
 
+// Bulk fetch returns the issues that exist and an error for each key that doesn't.
+async function handleBulkFetch(req: IncomingMessage, res: ServerResponse, base: string) {
+  const body = await readJsonBody(req);
+  const keys = body?.['issueIdsOrKeys'];
+  if (!Array.isArray(keys) || keys.length === 0 || keys.length > 100) {
+    sendErrors(res, 400, ['issueIdsOrKeys must list between 1 and 100 issues']);
+    return;
+  }
+  const fields = Array.isArray(body?.['fields']) ? (body['fields'] as unknown[]) : [];
+  const found = keys.filter((key): key is string => typeof key === 'string' && issueExists(key));
+  sendJson(res, 200, {
+    expand: '',
+    issues: found.map((key) => ({
+      expand: '',
+      id: issueIdFor(key),
+      self: `${base}/rest/api/3/issue/${issueIdFor(key)}`,
+      key,
+      fields: fields.includes('summary') ? { summary: summaryOf(key) } : {},
+    })),
+    issueErrors: keys
+      .filter((key) => !found.includes(key as string))
+      .map((key) => ({
+        id: String(key),
+        errorMessage: 'Issue does not exist or you do not have permission to see it.',
+      })),
+  });
+}
+
+// User properties: callers may read and write only their own.
+async function handleUserProperty(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  me: MockUser,
+  propertyKey: string,
+): Promise<void> {
+  const accountId = url.searchParams.get('accountId') ?? me.accountId;
+  if (accountId !== me.accountId) {
+    sendErrors(res, 403, ['You do not have permission to access this user property.']);
+    return;
+  }
+  const properties = userProperties.get(accountId) ?? new Map<string, unknown>();
+  userProperties.set(accountId, properties);
+  if (req.method === 'GET') {
+    if (!properties.has(propertyKey)) {
+      sendErrors(res, 404, [`The property with key '${propertyKey}' does not exist.`]);
+      return;
+    }
+    sendJson(res, 200, { key: propertyKey, value: properties.get(propertyKey) });
+    return;
+  }
+  if (req.method === 'PUT') {
+    let value: unknown;
+    try {
+      value = JSON.parse(await readBody(req));
+    } catch {
+      sendErrors(res, 400, ['The property value must be valid JSON.']);
+      return;
+    }
+    const existed = properties.has(propertyKey);
+    properties.set(propertyKey, value);
+    res.writeHead(existed ? 200 : 201);
+    res.end();
+    return;
+  }
+  sendErrors(res, 404, ['Not found']);
+}
+
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const base = `http://${req.headers.host ?? 'localhost'}`;
   const url = new URL(req.url ?? '/', base);
@@ -558,6 +651,17 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     (req.method === 'GET' || req.method === 'POST')
   ) {
     await handleSearch(req, res, url, base, me);
+    return;
+  }
+
+  if (url.pathname === '/rest/api/3/issue/bulkfetch' && req.method === 'POST') {
+    await handleBulkFetch(req, res, base);
+    return;
+  }
+
+  const userProperty = url.pathname.match(/^\/rest\/api\/[23]\/user\/properties\/([^/]+)$/);
+  if (userProperty !== null) {
+    await handleUserProperty(req, res, url, me, decodeURIComponent(userProperty[1]));
     return;
   }
 

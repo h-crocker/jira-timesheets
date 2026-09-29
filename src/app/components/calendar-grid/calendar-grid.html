@@ -4,13 +4,36 @@
       <header class="day-header">
         <span class="weekday" data-testid="weekday">{{ weekdayName(column.day) }}</span>
         <span class="date" data-testid="date-label">{{ dateLabel(column.day) }}</span>
+        @if (leaveEnabled()) {
+          <label
+            class="leave-toggle"
+            [title]="
+              leaveLocked(column.weekday) ? 'Leave logged by hand in Jira' : 'Log this day as leave'
+            "
+          >
+            <input
+              type="checkbox"
+              [attr.data-testid]="'leave-' + column.weekday"
+              [checked]="onLeave(column.weekday)"
+              [disabled]="leaveLocked(column.weekday)"
+              (change)="leaveToggled.emit(column.weekday)"
+            />
+            On leave
+          </label>
+        }
       </header>
       @if (column.events.length === 0) {
         <div class="empty" data-testid="empty-state">No entries</div>
       } @else {
         <div class="events">
           @for (event of column.events; track event.id) {
-            <div class="event-row" [attr.data-testid]="'event-' + event.id">
+            <div
+              class="event-row"
+              [class.pending-deletion]="event.pendingDeletion"
+              [attr.data-testid]="'event-' + event.id"
+              [attr.data-pending-deletion]="event.pendingDeletion ? 'true' : null"
+              [attr.title]="event.pendingDeletion ? 'Deleted when you sync' : null"
+            >
               <span class="time-range">{{ timeRange(event) }}</span>
               <span class="issue-key">{{ event.issueKey }}</span>
               <span class="summary">{{ event.summary }}</span>

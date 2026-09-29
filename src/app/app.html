@@ -39,13 +39,31 @@
     <p class="summary" data-testid="plan-summary">
       Planned: {{ plan().creations.length }} to create, {{ plan().deletions.length }} to delete
     </p>
-    <app-calendar-grid [events]="derivedCalendarEvents()" [weekStart]="currentWeek()" />
+    <app-calendar-grid
+      [events]="derivedCalendarEvents()"
+      [weekStart]="currentWeek()"
+      [leaveEnabled]="leaveEnabled()"
+      [leaveDays]="leaveDays()"
+      [lockedLeaveDays]="leaveState().locked"
+      (leaveToggled)="toggleLeave($event)"
+    />
+    @if (settings().activityMode) {
+      <app-activity-panel
+        [issues]="activityIssues()"
+        [unkeyedPullRequests]="unkeyedPullRequests()"
+        [placeholderIssueKey]="settings().placeholderIssueKey"
+        [warnings]="activityWarnings()"
+      />
+    }
   </section>
   <aside class="sidebar">
     <app-settings-panel
       [settings]="settings()"
       [credentials]="credentials()"
+      [githubCredentials]="githubCredentials()"
       (workHoursChanged)="onWorkHoursChanged($event)"
+      (activitySettingsChanged)="onActivitySettingsChanged($event)"
+      (githubCredentialsChanged)="onGithubCredentialsChanged($event)"
       (allocationAdded)="onAllocationAdded($event)"
       (allocationRemoved)="onAllocationRemoved($event)"
       (scheduleAdded)="onScheduleAdded($event)"

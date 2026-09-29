@@ -10,6 +10,10 @@ const SETTINGS: UserSettings = {
   schedules: [
     { id: 's1', issueKey: 'GWP-1', summary: 'Standup', weekdays: [1, 3], startTime: '09:30', durationSeconds: 900, enabled: true },
   ],
+  activityMode: false,
+  leaveIssueKey: '',
+  placeholderIssueKey: '',
+  githubOrgs: [],
 };
 
 describe('SettingsPanelComponent', () => {
@@ -126,5 +130,40 @@ describe('SettingsPanelComponent', () => {
     q(fixture, 'clear-credentials').click();
 
     expect(emitted).toEqual([{ email: 'a@b.c', apiToken: 'new-token', host: 'https://x.atlassian.net' }, null]);
+  });
+
+  it('emits the activity settings', () => {
+    const fixture = create({ ...SETTINGS, githubOrgs: ['acme'] });
+    const emitted: unknown[] = [];
+    fixture.componentInstance.activitySettingsChanged.subscribe((v) => emitted.push(v));
+
+    expect(q<HTMLInputElement>(fixture, 'activity-mode').checked).toBe(false);
+    expect(q<HTMLInputElement>(fixture, 'github-orgs').value).toBe('acme');
+    q<HTMLInputElement>(fixture, 'activity-mode').click();
+    type(q<HTMLInputElement>(fixture, 'leave-issue-key'), ' HR-1 ');
+    type(q<HTMLInputElement>(fixture, 'placeholder-issue-key'), 'GWP-100');
+    type(q<HTMLInputElement>(fixture, 'github-orgs'), 'acme, widgets  ');
+    q(fixture, 'save-activity-settings').click();
+
+    expect(emitted).toEqual([
+      {
+        activityMode: true,
+        leaveIssueKey: 'HR-1',
+        placeholderIssueKey: 'GWP-100',
+        githubOrgs: ['acme', 'widgets'],
+      },
+    ]);
+  });
+
+  it('emits the GitHub token, defaulting the API URL, and clears it', () => {
+    const fixture = create();
+    const emitted: unknown[] = [];
+    fixture.componentInstance.githubCredentialsChanged.subscribe((v) => emitted.push(v));
+
+    type(q<HTMLInputElement>(fixture, 'github-token'), 'gh-token');
+    q(fixture, 'github-form').dispatchEvent(new Event('submit', { cancelable: true }));
+    q(fixture, 'clear-github').click();
+
+    expect(emitted).toEqual([{ token: 'gh-token', apiUrl: 'https://api.github.com' }, null]);
   });
 });

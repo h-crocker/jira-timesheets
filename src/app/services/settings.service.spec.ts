@@ -10,6 +10,10 @@ const DEFAULTS = {
   workDays: [1, 2, 3, 4, 5],
   allocations: [],
   schedules: [],
+  activityMode: false,
+  leaveIssueKey: '',
+  placeholderIssueKey: '',
+  githubOrgs: [],
 };
 
 describe('SettingsService', () => {
@@ -35,11 +39,10 @@ describe('SettingsService', () => {
 
     const service = new SettingsService();
     expect(service.settings()).toEqual({
+      ...DEFAULTS,
       startTime: '08:30',
       hoursPerDay: 8,
       workDays: [1, 2],
-      allocations: [],
-      schedules: [],
     });
     expect(service.credentials()).toEqual({
       email: 'dev@example.com',
@@ -142,5 +145,39 @@ describe('SettingsService', () => {
     service.clearCredentials();
     expect(service.credentials()).toBeNull();
     expect(localStorage.getItem(CREDENTIALS_KEY)).toBeNull();
+  });
+
+  it('loads the activity settings, ignoring values of the wrong type', () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        activityMode: true,
+        leaveIssueKey: 'HR-1',
+        placeholderIssueKey: 42,
+        githubOrgs: ['acme', 7],
+      }),
+    );
+    expect(new SettingsService().settings()).toEqual({
+      ...DEFAULTS,
+      activityMode: true,
+      leaveIssueKey: 'HR-1',
+      githubOrgs: ['acme'],
+    });
+  });
+
+  it('keeps the GitHub token apart from the Jira credentials', () => {
+    const service = new SettingsService();
+    expect(service.githubCredentials()).toBeNull();
+
+    service.setGithubCredentials({ token: 'gh-token', apiUrl: 'https://api.github.com' });
+    expect(new SettingsService().githubCredentials()).toEqual({
+      token: 'gh-token',
+      apiUrl: 'https://api.github.com',
+    });
+    expect(localStorage.getItem(CREDENTIALS_KEY)).toBeNull();
+
+    service.clearGithubCredentials();
+    expect(service.githubCredentials()).toBeNull();
+    expect(new SettingsService().githubCredentials()).toBeNull();
   });
 });
