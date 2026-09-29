@@ -1,10 +1,108 @@
+import type * as http from 'node:http';
 import { TestBed } from '@angular/core/testing';
+import mockServer from '../../../mock-jira-server';
 import { JIRA_RELAY_URL, JiraIntegrationService } from './jira-integration.service';
 import { SettingsService } from './settings.service';
 
+const { startServer, stopServer, resetMockJira } = mockServer;
+
+const MONDAY = new Date(2026, 8, 28); // the mock seeds worklogs in this week
+const NEXT_MONDAY = new Date(2026, 9, 5);
+
 describe('JiraIntegrationService', () => {
+  let server: http.Server;
+  let host: string;
+
+  beforeAll(async () => {
+    server = await startServer(0);
+    const address = server.address();
+    if (address === null || typeof address !== 'object') {
+      throw new Error('mock server has no address');
+    }
+    host = `http://localhost:${address.port}`;
+  });
+
+  afterAll(async () => {
+    await stopServer(server);
+  });
+
   beforeEach(() => {
     localStorage.clear();
+    resetMockJira();
+  });
+
+  function service(email = 'dev@example.com'): JiraIntegrationService {
+    TestBed.inject(SettingsService).setCredentials({ email, apiToken: 'token', host });
+    return TestBed.inject(JiraIntegrationService);
+  }
+
+  it("finds the user's worklogs for the week on any issue, and only theirs", async () => {
+    const mine = await service().fetchMyWorklogs(MONDAY, NEXT_MONDAY);
+    expect(mine.map((worklog) => `${worklog.issueKey} ${worklog.comment}`).sort()).toEqual([
+      'GWP-2070 Code review',
+      'GWP-2070 Work on feature',
+      'GWP-2080 Support ticket',
+    ]);
+
+    const theirs = await service('colleague@example.com').fetchMyWorklogs(MONDAY, NEXT_MONDAY);
+    expect(theirs.map((worklog) => worklog.comment)).toEqual(["Colleague's pairing session"]);
+  });
+
+  it('returns nothing outside the requested window', async () => {
+    expect(await service().fetchMyWorklogs(new Date(2026, 8, 21), MONDAY)).toEqual([]);
+  });
+
+  it("creates worklogs with Jira's date format and reads them back", async () => {
+    const bodies: string[] = [];
+    const realFetch = globalThis.fetch;
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (init?.method === 'POST') {
+        bodies.push(String(init.body));
+      }
+      return realFetch(input, init);
+    });
+    try {
+      const created = await service().createWorklog(
+        'GWP-3000',
+        '2026-10-01T13:15:00.000Z',
+        900,
+        'Planning',
+      );
+      expect(created.started.toISOString()).toBe('2026-10-01T13:15:00.000Z');
+      expect(created.comment).toBe('Planning');
+      expect(JSON.parse(bodies[0]).started).toBe('2026-10-01T13:15:00.000+0000');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reads Atlassian Document Format comments as plain text', async () => {
+    await fetch(`${host}/rest/api/3/issue/GWP-3000/worklog`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        started: '2026-10-01T10:00:00.000+0000',
+        timeSpentSeconds: 900,
+        comment: {
+          type: 'doc',
+          version: 1,
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: 'Sprint ' },
+                { type: 'text', text: 'planning' },
+              ],
+            },
+            { type: 'paragraph', content: [{ type: 'text', text: 'Notes' }] },
+          ],
+        },
+      }),
+    });
+    const worklogs = await service().fetchMyWorklogs(MONDAY, NEXT_MONDAY);
+    expect(worklogs.find((worklog) => worklog.issueKey === 'GWP-3000')?.comment).toBe(
+      'Sprint planning\nNotes',
+    );
   });
 
   describe('routing', () => {
@@ -14,16 +112,12 @@ describe('JiraIntegrationService', () => {
     beforeEach(() => {
       requests = [];
       spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-        requests.push({
-          url: String(input),
-          headers: { ...(init?.headers as Record<string, string>) },
+        const url = String(input);
+        requests.push({ url, headers: { ...(init?.headers as Record<string, string>) } });
+        const body = url.includes('/myself') ? { accountId: 'me' } : { issues: [], isLast: true };
+        return new Response(JSON.stringify(body), {
+          headers: { 'Content-Type': 'application/json' },
         });
-        return new Response(
-          JSON.stringify({ startAt: 0, maxResults: 50, total: 0, worklogs: [] }),
-          {
-            headers: { 'Content-Type': 'application/json' },
-          },
-        );
       });
     });
 
@@ -42,7 +136,10 @@ describe('JiraIntegrationService', () => {
       TestBed.configureTestingModule({
         providers: [{ provide: JIRA_RELAY_URL, useValue: 'http://localhost:4200/jira-relay' }],
       });
-      await useSite('https://example-site.atlassian.net/jira/your-work').fetchWorklogs('GWP-1');
+      await useSite('https://example-site.atlassian.net/jira/your-work').fetchMyWorklogs(
+        MONDAY,
+        NEXT_MONDAY,
+      );
 
       expect(requests.length).toBeGreaterThan(0);
       for (const request of requests) {
@@ -53,7 +150,7 @@ describe('JiraIntegrationService', () => {
     });
 
     it('calls the site directly without a relay, adding a missing https://', async () => {
-      await useSite('example-site.atlassian.net').fetchWorklogs('GWP-1');
+      await useSite('example-site.atlassian.net').fetchMyWorklogs(MONDAY, NEXT_MONDAY);
 
       expect(requests.length).toBeGreaterThan(0);
       for (const request of requests) {

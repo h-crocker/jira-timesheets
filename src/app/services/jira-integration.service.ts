@@ -6,6 +6,8 @@ import { SettingsService } from './settings.service';
 
 const DEFAULT_HOST = 'http://localhost:3000';
 const PAGE_SIZE = 50;
+// ADF nodes whose children are inline text rather than blocks.
+const INLINE_PARENTS = new Set<unknown>(['paragraph', 'heading', 'codeBlock']);
 
 /**
  * Base URL of the dev-server relay to Jira (proxy.conf.mjs), or null to call Jira directly.
@@ -28,6 +30,22 @@ function siteOrigin(host: string | undefined): string {
   }
 }
 
+/** Jira wants yyyy-MM-dd'T'HH:mm:ss.SSSZ (2026-09-28T09:00:00.000+0000), not a trailing "Z". */
+function jiraDateTime(date: Date): string {
+  return date.toISOString().replace(/Z$/, '+0000');
+}
+
+function jqlDate(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function addDays(date: Date, days: number): Date {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+}
+
 @Injectable({ providedIn: 'root' })
 export class JiraIntegrationService {
   private readonly relayUrl = inject(JIRA_RELAY_URL);
@@ -36,26 +54,24 @@ export class JiraIntegrationService {
 
   constructor(private readonly settingsService: SettingsService) {}
 
-  async fetchWorklogs(issueKey: string): Promise<JiraWorklog[]> {
+  /**
+   * The current user's worklogs started in [from, to). Issues are found by searching for the
+   * user's worklogs, plus `issueKeys`, since search results can lag behind worklogs just written.
+   */
+  async fetchMyWorklogs(from: Date, to: Date, issueKeys: string[] = []): Promise<JiraWorklog[]> {
     const client = this.getClient();
-    const worklogs: JiraWorklog[] = [];
-    let startAt = 0;
-    for (;;) {
-      const page = await client.issueWorklogs.getIssueWorklog({
-        issueIdOrKey: issueKey,
-        startAt,
-        maxResults: PAGE_SIZE,
-      });
-      const items = page.worklogs ?? [];
-      for (const item of items) {
-        worklogs.push(this.toJiraWorklog(issueKey, item));
-      }
-      const total = page.total ?? worklogs.length;
-      startAt += items.length;
-      if (items.length === 0 || startAt >= total) {
-        return worklogs;
-      }
+    const [{ accountId }, found] = await Promise.all([
+      client.myself.getCurrentUser(),
+      this.findIssuesWithMyWorklogs(from, to),
+    ]);
+    if (accountId === undefined) {
+      throw new Error('Jira did not identify the current user');
     }
+    const keys = [...new Set([...found, ...issueKeys])];
+    const results = await Promise.all(
+      keys.map((key) => this.fetchIssueWorklogs(key, from, to, accountId)),
+    );
+    return results.flat();
   }
 
   async createWorklog(
@@ -67,7 +83,7 @@ export class JiraIntegrationService {
     const client = this.getClient();
     const created = await client.issueWorklogs.addWorklog({
       issueIdOrKey: issueKey,
-      started: new Date(started),
+      started: jiraDateTime(new Date(started)),
       timeSpentSeconds,
       ...(comment === undefined ? {} : { comment }),
     });
@@ -82,6 +98,66 @@ export class JiraIntegrationService {
   refreshClient(): void {
     this.client = null;
     this.clientKey = null;
+  }
+
+  private async findIssuesWithMyWorklogs(from: Date, to: Date): Promise<string[]> {
+    const client = this.getClient();
+    // JQL dates are days in the Jira profile's time zone, so search a day either side; the
+    // `started` window in fetchIssueWorklogs makes the exact cut.
+    const jql =
+      `worklogAuthor = currentUser() AND worklogDate >= "${jqlDate(addDays(from, -1))}"` +
+      ` AND worklogDate <= "${jqlDate(addDays(to, 1))}"`;
+    const keys: string[] = [];
+    let nextPageToken: string | undefined;
+    do {
+      const page = await client.issueSearch.searchAndReconsileIssuesUsingJql({
+        jql,
+        fields: ['summary'],
+        maxResults: PAGE_SIZE,
+        nextPageToken,
+      });
+      const issues = page.issues ?? [];
+      for (const issue of issues) {
+        if (issue.key !== undefined) {
+          keys.push(issue.key);
+        }
+      }
+      nextPageToken =
+        page.isLast !== true && issues.length > 0 ? (page.nextPageToken ?? undefined) : undefined;
+    } while (nextPageToken !== undefined);
+    return keys;
+  }
+
+  private async fetchIssueWorklogs(
+    issueKey: string,
+    from: Date,
+    to: Date,
+    accountId: string,
+  ): Promise<JiraWorklog[]> {
+    const client = this.getClient();
+    const worklogs: JiraWorklog[] = [];
+    let startAt = 0;
+    for (;;) {
+      const page = await client.issueWorklogs.getIssueWorklog({
+        issueIdOrKey: issueKey,
+        startAt,
+        maxResults: PAGE_SIZE,
+        startedAfter: from.getTime(),
+        startedBefore: to.getTime(),
+      });
+      const items = page.worklogs ?? [];
+      for (const item of items) {
+        // Issues are shared: colleagues' time must not count as ours, let alone be deleted.
+        if (item.author?.accountId === accountId) {
+          worklogs.push(this.toJiraWorklog(issueKey, item));
+        }
+      }
+      const total = page.total ?? startAt + items.length;
+      startAt += items.length;
+      if (items.length === 0 || startAt >= total) {
+        return worklogs;
+      }
+    }
   }
 
   private getClient(): CloudClient {
@@ -125,20 +201,23 @@ export class JiraIntegrationService {
     if (typeof comment === 'string') {
       return comment;
     }
-    const text = this.collectText(comment.content);
+    const text = this.collectText(comment).trim();
     return text === '' ? undefined : text;
   }
 
-  private collectText(value: unknown): string {
-    if (typeof value === 'string') {
-      return value;
+  /** Plain text of an Atlassian Document Format node, with blocks on separate lines. */
+  private collectText(node: unknown): string {
+    if (node === null || typeof node !== 'object') {
+      return '';
     }
-    if (Array.isArray(value)) {
-      return value.map((item) => this.collectText(item)).join('');
+    const { type, text, content } = node as { type?: unknown; text?: unknown; content?: unknown };
+    if (type === 'text') {
+      return typeof text === 'string' ? text : '';
     }
-    if (value !== null && typeof value === 'object') {
-      return Object.values(value).map((item) => this.collectText(item)).join('');
+    if (type === 'hardBreak') {
+      return '\n';
     }
-    return '';
+    const children = Array.isArray(content) ? content.map((child) => this.collectText(child)) : [];
+    return children.join(INLINE_PARENTS.has(type) ? '' : '\n');
   }
 }
