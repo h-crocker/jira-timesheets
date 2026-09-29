@@ -13,9 +13,17 @@ npm run mock-server   # Atlassian-style mock Jira on http://localhost:3000 (seed
 npm start             # Angular app on http://localhost:4200
 ```
 
+Jira Cloud sends no CORS headers, so a web page can't call it directly. `npm start` therefore relays the
+app's Jira requests through the dev server (`proxy.conf.mjs`), which forwards them to
+`https://<site>.atlassian.net` or a local mock and to nothing else. Always run the app with `npm start`: a
+static `ng build` served elsewhere has no relay.
+
 By default the app talks to `http://localhost:3000`. To use real Jira, enter your Atlassian email,
 API token and site URL (e.g. `https://your-site.atlassian.net`) in the **Jira** section of the settings
 panel. Credentials are kept in `localStorage` only; use *Clear credentials* to go back to the mock.
+
+If requests fail, the `npm start` terminal shows the relay's error. A 401 means Jira rejected the email or
+token. Behind a TLS-inspecting corporate proxy, start the app with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`.
 
 ## Test / build
 

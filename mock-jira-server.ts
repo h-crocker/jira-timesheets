@@ -2,6 +2,9 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 
 const http = require('node:http') as typeof import('node:http');
 
+// Deliberately sends no CORS headers: Jira Cloud doesn't either, so a page served from localhost
+// can't call it directly. `npm start` relays requests through the dev server (see proxy.conf.mjs).
+
 interface JiraUser {
   name: string;
   displayName: string;
@@ -128,15 +131,6 @@ function parseNonNegativeInt(value: string | null): number | undefined {
 }
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Atlassian-Token');
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
-
   const parsedUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
   const match = parsedUrl.pathname.match(/^\/rest\/api\/[23]\/issue\/([^/]+)\/worklog(?:\/([^/]+))?$/);
   if (match === null) {

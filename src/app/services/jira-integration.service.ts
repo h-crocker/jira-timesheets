@@ -1,4 +1,4 @@
-import { Injectable } from '@angular/core';
+import { Injectable, InjectionToken, inject } from '@angular/core';
 import { createCloudClient, type CloudClient } from 'jira.js';
 import type { Worklog } from 'jira.js/cloud';
 import type { JiraWorklog } from '../models/domain';
@@ -7,8 +7,30 @@ import { SettingsService } from './settings.service';
 const DEFAULT_HOST = 'http://localhost:3000';
 const PAGE_SIZE = 50;
 
+/**
+ * Base URL of the dev-server relay to Jira (proxy.conf.mjs), or null to call Jira directly.
+ * Browsers can't call Jira Cloud directly because it sends no CORS headers.
+ */
+export const JIRA_RELAY_URL = new InjectionToken<string | null>('JIRA_RELAY_URL', {
+  factory: () => null,
+});
+
+function siteOrigin(host: string | undefined): string {
+  const trimmed = host?.trim() ?? '';
+  if (trimmed === '') {
+    return DEFAULT_HOST;
+  }
+  try {
+    return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`)
+      .origin;
+  } catch {
+    return trimmed;
+  }
+}
+
 @Injectable({ providedIn: 'root' })
 export class JiraIntegrationService {
+  private readonly relayUrl = inject(JIRA_RELAY_URL);
   private client: CloudClient | null = null;
   private clientKey: string | null = null;
 
@@ -64,19 +86,24 @@ export class JiraIntegrationService {
 
   private getClient(): CloudClient {
     const credentials = this.settingsService.credentials();
-    const key = credentials === null ? 'default' : `${credentials.host}\u0000${credentials.email}`;
+    const site = siteOrigin(credentials?.host);
+    const key = credentials === null ? 'default' : `${site}\u0000${credentials.email}`;
     if (this.client !== null && this.clientKey === key) {
       return this.client;
     }
-    const host =
-      credentials !== null && credentials.host.trim() !== '' ? credentials.host : DEFAULT_HOST;
-    this.client =
-      credentials === null
-        ? createCloudClient({ host })
-        : createCloudClient({
-            host,
-            auth: { type: 'basic', email: credentials.email, apiToken: credentials.apiToken },
-          });
+    this.client = createCloudClient({
+      host: this.relayUrl ?? site,
+      ...(this.relayUrl === null ? {} : { headers: { 'X-Jira-Host': site } }),
+      ...(credentials === null
+        ? {}
+        : {
+            auth: {
+              type: 'basic' as const,
+              email: credentials.email,
+              apiToken: credentials.apiToken,
+            },
+          }),
+    });
     this.clientKey = key;
     return this.client;
   }
