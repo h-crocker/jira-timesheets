@@ -19,6 +19,13 @@
     "strictInjectionParameters": true,
     "strictInputAccessModifiers": true
   },
+  "ts-node": {
+    "compilerOptions": {
+      "types": [
+        "node"
+      ]
+    }
+  },
   "files": [],
   "references": [
     {

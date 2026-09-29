@@ -3,12 +3,16 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "esModuleInterop": true,
     "types": [
-      "vitest/globals"
+      "vitest/globals",
+      "node"
     ]
   },
   "include": [
     "src/**/*.d.ts",
-    "src/**/*.spec.ts"
+    "src/**/*.spec.ts",
+    "mock-jira-server.ts",
+    "mock-jira-server.spec.ts"
   ]
 }
