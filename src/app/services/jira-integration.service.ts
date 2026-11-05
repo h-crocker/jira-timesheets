@@ -25,7 +25,7 @@ export const JIRA_RELAY_URL = new InjectionToken<string | null>('JIRA_RELAY_URL'
   factory: () => null,
 });
 
-function siteOrigin(host: string | undefined): string {
+export function siteOrigin(host: string | undefined): string {
   const trimmed = host?.trim() ?? '';
   if (trimmed === '') {
     return DEFAULT_HOST;

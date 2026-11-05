@@ -1,6 +1,7 @@
 // Plans, apply results and verification as Markdown, for the terminal and for a file to review.
 
 import type { ApplyResult } from './apply';
+import { dayRows, opLine, quote } from './plan-view';
 import { h, timeSpan } from './planner';
 import { longDate, parseJiraDateTime, shortDate } from './time-zone';
 import type { Finding, Op, Plan, PlannedDay } from './types';
@@ -21,69 +22,19 @@ const KIND_LABEL: Record<Finding['kind'], string> = {
   weekend: 'Logged on a non-working day',
 };
 
-function quote(text: string): string {
-  return text === '' ? '(no comment)' : `"${text.replace(/\n/g, ' / ')}"`;
-}
-
 function describeOp(op: Op, timeZone: string): string {
-  const after =
-    op.kind !== 'create' && op.requires !== undefined && op.requires.length > 0
-      ? ` (only once ${op.requires.join(', ')} is made, so time is never lost)`
-      : '';
-  return describeOpBody(op, timeZone) + after;
-}
-
-function describeOpBody(op: Op, timeZone: string): string {
-  if (op.kind === 'create') {
-    const start = parseJiraDateTime(op.started);
-    return `**CREATE** ${op.issueKey} · ${timeSpan(start, op.seconds, timeZone)} · ${h(op.seconds)} · ${quote(op.comment)} — ${op.why}`;
-  }
-  const start = parseJiraDateTime(op.started);
-  if (op.kind === 'delete') {
-    return `**DELETE** ${op.issueKey} worklog ${op.worklogId} · ${timeSpan(start, op.before.seconds, timeZone)} · ${h(op.before.seconds)} · ${quote(op.before.comment)} — ${op.why}`;
-  }
-  const newStart = op.after.started === undefined ? start : parseJiraDateTime(op.after.started);
-  const parts: string[] = [];
-  if (op.after.started !== undefined) {
-    parts.push(
-      `${timeSpan(start, op.before.seconds, timeZone)} → **${timeSpan(newStart, op.after.seconds, timeZone)}** (moved, same day)`,
-    );
-  } else {
-    parts.push(`starts ${timeSpan(start, op.before.seconds, timeZone).split('–')[0]} (unchanged)`);
-  }
-  if (op.after.seconds !== op.before.seconds) {
-    parts.push(
-      `${h(op.before.seconds)} → ${h(op.after.seconds)}` +
-        (op.after.started === undefined
-          ? ` (ends ${timeSpan(start, op.after.seconds, timeZone).split('–')[1]})`
-          : ''),
-    );
-  } else {
-    parts.push(h(op.before.seconds));
-  }
-  if (op.after.comment !== op.before.comment) {
-    parts.push(`comment ${quote(op.before.comment)} → ${quote(op.after.comment)}`);
-  } else {
-    parts.push(quote(op.before.comment));
-  }
-  return `**EDIT** ${op.issueKey} worklog ${op.worklogId} · ${parts.join(' · ')} — ${op.why}`;
+  const line = opLine(op, timeZone);
+  return (
+    `**${line.label}** ${line.issueKey} ${line.text} — ${line.why}` +
+    (line.waits === undefined ? '' : ` (${line.waits})`)
+  );
 }
 
 function dayTable(day: PlannedDay): string[] {
-  const issues = [
-    ...new Set([
-      ...Object.keys(day.before.byIssue),
-      ...Object.keys(day.after.byIssue),
-      ...Object.keys(day.expectedBefore),
-    ]),
-  ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  const rows = issues.map((key) => {
-    const expected = day.expectedBefore[key];
-    const now = day.before.byIssue[key] ?? 0;
-    const after = day.after.byIssue[key] ?? 0;
-    const mismatch = expected !== undefined && expected !== now ? ' ⚠' : '';
-    return `| ${key} | ${expected === undefined ? '' : h(expected)} | ${h(now)}${mismatch} | ${after === now ? '' : h(after)} |`;
-  });
+  const rows = dayRows(day).map(
+    (row) =>
+      `| ${row.issueKey} | ${row.expected === undefined ? '' : h(row.expected)} | ${h(row.now)}${row.mismatch ? ' ⚠' : ''} | ${row.after === row.now ? '' : h(row.after)} |`,
+  );
   return [
     '| Issue | File expects | Jira now | After |',
     '| --- | ---: | ---: | ---: |',

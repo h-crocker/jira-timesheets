@@ -111,11 +111,22 @@ for each day and totals, as logged in Jira now; changes you have not synced yet 
 a formatted table into Outlook,
 Teams, Word, Excel or Confluence, and as a Markdown table into plain-text editors.
 
-## Correcting past worklogs (command line)
+## Correcting past worklogs
 
 For one-off fixes to weeks already logged (adding sick leave, moving time between tickets,
-rewording comments) there is a command line tool. It talks to Jira directly from Node, so it needs
-no dev server:
+rewording comments), press **Corrections** in the header. Paste a corrections file (see below) and
+press **Preview corrections**: this only reads Jira, using the credentials saved in the **Jira**
+settings, and shows the dry run, day by day: each worklog that would be edited, created or deleted,
+the hours before and after, and anything blocked or worth checking. If the dry run deletes
+worklogs, tick that you approve them; then **Apply** downloads a backup of every worklog on those
+days, makes the changes, and checks Jira against the plan. Changes Jira refuses are listed (and can
+be downloaded with **Download log**); the rest still go ahead. Run it with `npm start`, like the rest
+of the app. The pasted file is kept in this browser's storage between visits.
+
+### From the command line
+
+The same corrections can be run from a terminal. It talks to Jira directly from Node, so it needs
+no dev server, but it needs the API token again:
 
 ```bash
 npm run timesheets -- plan corrections/my-fixes.json             # read-only dry run
@@ -219,8 +230,9 @@ npm run build
   headers, and refusing writes sent with a browser's user agent. Its tests check its responses against
   `jira.js`'s own schemas, and `proxy.conf.spec.ts` checks what the relay sends Jira.
 - `src/app/corrections/`: the correction planner, applier, verifier, validation and report, as
-  plain TypeScript with no Angular or Node dependency, and `cli/timesheets.ts`, the command line
-  around them. Days are worked out in the Jira profile's time zone (`time-zone.ts`), not the
+  plain TypeScript with no Angular or Node dependency. `CorrectionsService` and the Corrections view
+  (`corrections-page`, loaded only when opened, and the display-only `corrections-panel`) run them
+  in the app through the relay; `cli/timesheets.ts` runs them from a terminal. Days are worked out in the Jira profile's time zone (`time-zone.ts`), not the
   machine's.
 - `mock-github-server.ts` serves the GitHub endpoints the app reads, with Link-header pagination and CORS
   headers like GitHub's.

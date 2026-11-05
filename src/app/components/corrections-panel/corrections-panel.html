@@ -1,0 +1,305 @@
+<section class="corrections" data-testid="corrections">
+  <header class="intro">
+    <div>
+      <h2>Correct past worklogs</h2>
+      <p class="muted">
+        Paste a corrections file, preview exactly what would change, then apply it. Uses the Jira
+        credentials saved in Settings: <span data-testid="corrections-target">{{ target() }}</span
+        >.
+      </p>
+    </div>
+  </header>
+
+  <div class="card">
+    <label class="label" for="corrections-json">Corrections file (JSON)</label>
+    <textarea
+      id="corrections-json"
+      data-testid="corrections-json"
+      rows="12"
+      spellcheck="false"
+      placeholder='{ "timeZone": "Europe/London", "sickLeave": { "issueKey": "…" }, "days": [ … ] }'
+      [value]="draft()"
+      [disabled]="busy()"
+      (input)="onDraftInput($event)"
+    ></textarea>
+    @if (parseError(); as message) {
+      <p class="message error" role="alert" data-testid="corrections-parse-error">{{ message }}</p>
+    }
+    <div class="row">
+      <button
+        type="button"
+        class="primary"
+        data-testid="corrections-preview"
+        [disabled]="busy() || !canPreview()"
+        (click)="preview.emit()"
+      >
+        {{ plan() === null ? 'Preview corrections' : 'Preview again' }}
+      </button>
+      <span class="muted">Previewing only reads from Jira; nothing changes until you apply.</span>
+    </div>
+  </div>
+
+  @if (progress(); as text) {
+    <p class="message" data-testid="corrections-progress" aria-live="polite">{{ text }}</p>
+  }
+  @if (error(); as message) {
+    <p class="message error" role="alert" data-testid="corrections-error">{{ message }}</p>
+  }
+
+  @if (result(); as run) {
+    <div class="card" data-testid="corrections-result" [attr.data-status]="run.status">
+      <h3>{{ resultTitle() }}</h3>
+      <p>{{ run.message }}</p>
+      @if (run.backupPath) {
+        <p class="muted">
+          Backup downloaded as <code>{{ run.backupPath }}</code>
+          <button type="button" class="link" (click)="downloadBackup.emit()">Download again</button>
+        </p>
+      }
+      @if (run.failures.length > 0) {
+        <h4>Couldn't be changed ({{ run.failures.length }})</h4>
+        <table data-testid="corrections-failures">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Change</th>
+              <th>Why</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (failure of run.failures; track $index) {
+              <tr>
+                <td>{{ shortDate(failure.date) }}</td>
+                <td>{{ failure.action }}</td>
+                <td>{{ failure.reason }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+      @if (offDays().length > 0) {
+        <h4>Days not at their planned hours</h4>
+        <ul>
+          @for (day of offDays(); track day.date) {
+            <li>
+              {{ longDate(day.date) }}: {{ h(day.totalSeconds) }} (planned
+              {{ h(day.plannedSeconds) }})
+            </li>
+          }
+        </ul>
+      }
+      @if (verify(); as check) {
+        <h4 data-testid="corrections-verify">
+          Check against Jira:
+          {{
+            check.ok
+              ? run.failures.length > 0
+                ? 'as planned, apart from the changes above'
+                : 'as planned'
+              : 'differences found'
+          }}
+        </h4>
+        <ul class="verify">
+          @for (day of check.days; track day.date) {
+            <li [attr.data-status]="day.status">
+              {{ longDate(day.date) }} · {{ h(day.totalSeconds) }}
+              @for (problem of day.problems; track $index) {
+                <span class="problem">{{ problem }}</span>
+              }
+            </li>
+          }
+          @for (total of check.totals; track total.label) {
+            <li [attr.data-status]="total.ok ? 'ok' : 'mismatch'">
+              {{ total.label }}: {{ h(total.seconds) }} (expected {{ h(total.expectedSeconds) }})
+            </li>
+          }
+        </ul>
+      }
+      <button type="button" data-testid="corrections-download-log" (click)="downloadLog.emit()">
+        Download log
+      </button>
+    </div>
+  }
+
+  @if (plan(); as plan) {
+    @if (summary(); as s) {
+      <div class="card" data-testid="corrections-summary">
+        <h3>Dry run</h3>
+        <p class="muted">Plan {{ plan.planId }} · days in {{ plan.timeZone }}</p>
+        <ul class="stats">
+          <li>
+            <strong>{{ s.ready }}</strong> days ready
+          </li>
+          <li [class.bad]="s.blocked.length > 0">
+            <strong>{{ s.blocked.length }}</strong> blocked
+          </li>
+          <li>
+            <strong>{{ s.edits }}</strong> edits
+          </li>
+          <li>
+            <strong>{{ s.deletions.length }}</strong> deletions
+          </li>
+          <li>
+            <strong>{{ s.creates }}</strong> new worklogs
+          </li>
+        </ul>
+        <ul class="checks">
+          @for (check of plan.checks; track check.label) {
+            <li [class.bad]="!check.ok">
+              {{ check.ok ? '✓' : '✗' }} {{ check.label }}: {{ check.detail }}
+            </li>
+          }
+        </ul>
+      </div>
+
+      @if (s.blocked.length > 0) {
+        <div class="card bad" data-testid="corrections-blocked">
+          <h3>Blocked days (won't be applied)</h3>
+          <ul>
+            @for (day of s.blocked; track day.date) {
+              <li>
+                <strong>{{ longDate(day.date) }}</strong
+                >: {{ day.problems.join(' ') }}
+              </li>
+            }
+          </ul>
+        </div>
+      }
+      @if (s.warned.length > 0) {
+        <div class="card warn" data-testid="corrections-warnings">
+          <h3>Check before approving</h3>
+          <ul>
+            @for (day of s.warned; track day.date) {
+              <li>
+                <strong>{{ longDate(day.date) }}</strong
+                >: {{ day.warnings.join(' ') }}
+              </li>
+            }
+          </ul>
+        </div>
+      }
+
+      <div class="days">
+        @for (item of days(); track item.day.date) {
+          <details class="day" [attr.data-status]="item.day.status" [open]="item.open">
+            <summary>
+              <span class="date">{{ item.label }}</span>
+              <span class="badge">{{ item.status }}</span>
+              <span class="totals">
+                {{ h(item.day.before.totalSeconds) }} → {{ h(item.day.after.totalSeconds) }}
+              </span>
+              <span class="muted"
+                >{{ item.ops.length }} change{{ item.ops.length === 1 ? '' : 's' }}</span
+              >
+            </summary>
+            <table>
+              <thead>
+                <tr>
+                  <th>Issue</th>
+                  <th>File expects</th>
+                  <th>Jira now</th>
+                  <th>After</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (row of item.rows; track row.issueKey) {
+                  <tr [class.bad]="row.mismatch">
+                    <td>{{ row.issueKey }}</td>
+                    <td>{{ row.expected === undefined ? '' : h(row.expected) }}</td>
+                    <td>{{ h(row.now) }}</td>
+                    <td>{{ row.after === row.now ? '' : h(row.after) }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+            @if (item.ops.length > 0) {
+              <ul class="ops">
+                @for (line of item.ops; track line.opId) {
+                  <li>
+                    <span class="op" [attr.data-kind]="line.label">{{ line.label }}</span>
+                    <strong>{{ line.issueKey }}</strong> {{ line.text }}
+                    <span class="muted"
+                      >— {{ line.why }}{{ line.waits ? ' (' + line.waits + ')' : '' }}</span
+                    >
+                  </li>
+                }
+              </ul>
+            }
+            @for (problem of item.day.problems; track $index) {
+              <p class="note bad">{{ problem }}</p>
+            }
+            @for (warning of item.day.warnings; track $index) {
+              <p class="note warn">{{ warning }}</p>
+            }
+            @for (note of item.day.notes; track $index) {
+              <p class="note">{{ note }}</p>
+            }
+          </details>
+        }
+      </div>
+
+      @if (findings().length > 0) {
+        <div class="card">
+          <h3>Other things on these days</h3>
+          @for (group of findings(); track group.label) {
+            <h4>{{ group.label }}</h4>
+            <ul>
+              @for (finding of group.items; track $index) {
+                <li>{{ longDate(finding.date) }}: {{ finding.message }}</li>
+              }
+            </ul>
+          }
+        </div>
+      }
+
+      @if (s.changes === 0) {
+        <p class="message" data-testid="corrections-nothing-to-apply">
+          Nothing to apply: Jira already matches these corrections, or every day is blocked.
+        </p>
+      } @else {
+        <div class="card apply" data-testid="corrections-apply-card">
+          @if (s.deletions.length > 0) {
+            <h3>Deletions to approve</h3>
+            <ul class="ops">
+              @for (deletion of s.deletions; track deletion.line.opId) {
+                <li>
+                  {{ shortDate(deletion.date) }} · <strong>{{ deletion.line.issueKey }}</strong>
+                  {{ deletion.line.text }}
+                </li>
+              }
+            </ul>
+            <label class="approve">
+              <input
+                type="checkbox"
+                data-testid="corrections-approve-deletions"
+                [checked]="deletionsApproved()"
+                [disabled]="busy()"
+                (change)="onApprove($event)"
+              />
+              I've reviewed these and approve deleting {{ s.deletions.length }} worklog{{
+                s.deletions.length === 1 ? '' : 's'
+              }}
+            </label>
+          }
+          <div class="row">
+            <button
+              type="button"
+              class="primary"
+              data-testid="corrections-apply"
+              [disabled]="!canApply()"
+              (click)="onApply()"
+            >
+              Apply {{ s.changes }} change{{ s.changes === 1 ? '' : 's' }} on {{ s.ready }} day{{
+                s.ready === 1 ? '' : 's'
+              }}
+            </button>
+            <span class="muted">
+              A backup of every worklog on these days downloads first. If Jira refuses a change,
+              it's listed and the rest still goes ahead, sick leave included.
+            </span>
+          </div>
+        </div>
+      }
+    }
+  }
+</section>

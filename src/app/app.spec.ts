@@ -1,5 +1,5 @@
 import type * as http from 'node:http';
-import { TestBed } from '@angular/core/testing';
+import { DeferBlockState, TestBed } from '@angular/core/testing';
 import mockGithub from '../../mock-github-server';
 import mockServer from '../../mock-jira-server';
 import { App, NOW, startOfWeek } from './app';
@@ -125,6 +125,24 @@ describe('App (smart component)', () => {
     const comments = fixture.componentInstance.worklogs().map((worklog) => worklog.comment);
     expect(comments).not.toContain("Colleague's pairing session");
     expect(fixture.componentInstance.plan().deletions).toEqual([]);
+  });
+
+  it('opens the Corrections view, using the saved Jira credentials, and goes back to the week', async () => {
+    const fixture = await create();
+    q(fixture, 'open-corrections').click();
+    fixture.detectChanges();
+    const [corrections] = await fixture.getDeferBlocks();
+    await corrections.render(DeferBlockState.Complete);
+    fixture.detectChanges();
+    expect(q(fixture, 'corrections')).not.toBeNull();
+    expect(q(fixture, 'corrections-target').textContent).toContain(
+      `${credentials.host} as dev@example.com`,
+    );
+    expect(root(fixture).querySelector('app-calendar-grid')).toBeNull();
+
+    q(fixture, 'open-corrections').click();
+    fixture.detectChanges();
+    expect(root(fixture).querySelector('app-calendar-grid')).not.toBeNull();
   });
 
   it('adding a recurring schedule via the settings panel mutates the calendar grid', async () => {

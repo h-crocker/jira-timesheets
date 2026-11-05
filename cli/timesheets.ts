@@ -23,7 +23,11 @@ import { applyPlan, type ApplyLogEntry } from '../src/app/corrections/apply';
 import { correctionsRange, parseCorrections } from '../src/app/corrections/corrections-file';
 import { fetchMergeTimes } from '../src/app/corrections/github-merges';
 import { JiraError, JiraRestClient, redact } from '../src/app/corrections/jira-rest-client';
-import { buildPlan } from '../src/app/corrections/planner';
+import {
+  planCorrections,
+  rangeWindow,
+  verifyCorrections,
+} from '../src/app/corrections/session';
 import {
   renderApply,
   renderFindings,
@@ -133,50 +137,6 @@ async function connect(): Promise<{ client: JiraRestClient; site: string }> {
   };
 }
 
-function rangeWindow(from: string, to: string, timeZone: string) {
-  return {
-    startMs: dayWindow(from, timeZone).start,
-    endMs: dayWindow(to, timeZone).end,
-    // JQL dates are in the profile zone; a day either side, then `started` makes the exact cut.
-    fromDate: addDaysToKey(from, -1),
-    toDate: addDaysToKey(to, 1),
-  };
-}
-
-const PREFLIGHT_PERMISSIONS = [
-  'WORK_ON_ISSUES',
-  'EDIT_OWN_WORKLOGS',
-  'DELETE_OWN_WORKLOGS',
-  'EDIT_ISSUES',
-];
-
-/** Issues that look like they would refuse changes: missing permissions or a non-editable status. */
-async function preflight(client: JiraRestClient, issueKeys: string[]): Promise<LockedIssues> {
-  const found: LockedIssues = {};
-  for (const key of issueKeys) {
-    try {
-      const permissions = await client.myPermissions(key, PREFLIGHT_PERMISSIONS);
-      const missing = ['WORK_ON_ISSUES', 'EDIT_OWN_WORKLOGS', 'DELETE_OWN_WORKLOGS'].filter(
-        (p) => !permissions[p],
-      );
-      if (missing.length > 0) {
-        found[key] = { reason: `you lack ${missing.join(', ')}`, source: 'pre-flight check' };
-        continue;
-      }
-      // With edit permission but no editable fields, the issue is in a non-editable status.
-      if (permissions['EDIT_ISSUES'] && (await client.editableFieldCount(key)) === 0) {
-        found[key] = { reason: 'its workflow status is not editable', source: 'pre-flight check' };
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      found[key] = {
-        reason: `couldn't be checked: ${client.redact(message)}`,
-        source: 'pre-flight check',
-      };
-    }
-  }
-  return found;
-}
 
 async function commandPlan(args: Args): Promise<number> {
   const file = args.positional[0];
@@ -186,50 +146,16 @@ async function commandPlan(args: Args): Promise<number> {
   const spec = parseCorrections(JSON.parse(readFileSync(file, 'utf8')));
   const { client, site } = await connect();
   const me = await client.myself();
-  if (spec.timeZone !== undefined && spec.timeZone !== me.timeZone) {
-    throw new Error(
-      `The corrections file is in ${spec.timeZone} but your Jira profile is in ${me.timeZone}. ` +
-        'Days would be read differently from how Jira shows them; fix one before planning.',
-    );
-  }
   const machineZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   if (machineZone !== me.timeZone) {
     console.error(
       `Note: this machine is in ${machineZone}; days are read in your Jira profile's zone, ${me.timeZone}.`,
     );
   }
-  const range = correctionsRange(spec);
-  const keys = [
-    ...new Set(
-      spec.days.flatMap((day) =>
-        day.changes.flatMap((change) =>
-          change.kind === 'set' ? [change.issueKey] : [change.fromIssueKey, change.toIssueKey],
-        ),
-      ),
-    ),
-    ...spec.commentRewrites.map((rewrite) => rewrite.issueKey),
-  ];
-  const { worklogs } = await client.ownWorklogs(
-    me.accountId,
-    me.timeZone,
-    rangeWindow(range.from, range.to, me.timeZone),
-    keys,
-  );
-  const lockedIssues: LockedIssues = {
-    ...Object.fromEntries(
-      Object.entries(spec.lockedIssues).map(([key, reason]) => [
-        key,
-        { reason, source: 'corrections file' },
-      ]),
-    ),
-    ...readLocked(),
-    ...(args.flags.has('skip-preflight') ? {} : await preflight(client, [...new Set(keys)])),
-  };
-  const plan = buildPlan(spec, worklogs, {
-    accountId: me.accountId,
-    timeZone: me.timeZone,
+  const plan = await planCorrections(client, spec, {
     site,
-    lockedIssues,
+    knownLocked: readLocked(),
+    skipPreflight: args.flags.has('skip-preflight'),
   });
   const out =
     flag(args, 'out') ??
@@ -357,22 +283,7 @@ function notMadeFromLog(planId: string): Map<string, string> {
 async function commandVerify(args: Args): Promise<number> {
   const plan = readPlan(args.positional[0]);
   const client = await connectFor(plan);
-  const dates = plan.days.map((day) => day.date).sort();
-  const keys = [
-    ...new Set(
-      plan.days.flatMap((day) => [
-        ...day.ops.map((op) => op.issueKey),
-        ...day.before.worklogs.map((w) => w.issueKey),
-      ]),
-    ),
-  ];
-  const { worklogs } = await client.ownWorklogs(
-    plan.accountId,
-    plan.timeZone,
-    rangeWindow(dates[0], dates[dates.length - 1], plan.timeZone),
-    keys,
-  );
-  const result = verifyPlan(plan, worklogs, notMadeFromLog(plan.planId));
+  const result = await verifyCorrections(client, plan, notMadeFromLog(plan.planId));
   console.log(renderVerify(result));
   return result.ok ? 0 : 1;
 }

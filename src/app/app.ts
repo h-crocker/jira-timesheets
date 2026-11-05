@@ -19,6 +19,7 @@ import type {
   RecurringSchedule,
 } from './models/domain';
 import { CalendarGridComponent } from './components/calendar-grid/calendar-grid';
+import { CorrectionsPageComponent } from './components/corrections-page/corrections-page';
 import {
   type ActivitySettingsChange,
   SettingsPanelComponent,
@@ -77,7 +78,12 @@ function errorMessage(error: unknown): string {
 
 @Component({
   selector: 'app-root',
-  imports: [WeekSelectorComponent, SettingsPanelComponent, CalendarGridComponent],
+  imports: [
+    WeekSelectorComponent,
+    SettingsPanelComponent,
+    CalendarGridComponent,
+    CorrectionsPageComponent,
+  ],
   styleUrl: './app.scss',
   templateUrl: './app.html',
 })
@@ -244,6 +250,9 @@ export class App {
       untracked(() => void this.loadWeek(week));
     });
   }
+
+  /** The week preview, or the Corrections view for fixing past worklogs. */
+  readonly view = signal<'week' | 'corrections'>('week');
 
   protected setWeek(week: Date): void {
     this.currentWeek.set(startOfWeek(week));

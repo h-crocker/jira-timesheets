@@ -21,7 +21,12 @@ export interface JiraRestOptions {
   /** Site origin, e.g. https://your-site.atlassian.net, or the mock at http://localhost:3000. */
   baseUrl: string;
   email: string;
+  /** Empty for the local mock with no credentials saved, which then acts as its dev user. */
   apiToken: string;
+  /** Sent with every request, e.g. the X-Jira-Host the dev-server relay forwards to. */
+  headers?: Record<string, string>;
+  /** Browsers set their own (the relay replaces it); null to send none. */
+  userAgent?: string | null;
   fetch?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -136,7 +141,8 @@ export function toOwnWorklog(issueKey: string, raw: RawWorklog, timeZone: string
 
 export class JiraRestClient {
   private readonly baseUrl: string;
-  private readonly authorization: string;
+  private readonly authorization: string | null;
+  private readonly headers: Record<string, string>;
   private readonly secrets: string[];
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -144,9 +150,15 @@ export class JiraRestClient {
   constructor(options: JiraRestOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     const basic = btoa(`${options.email}:${options.apiToken}`);
-    this.authorization = `Basic ${basic}`;
-    this.secrets = [options.apiToken, basic];
-    this.fetchImpl = options.fetch ?? fetch;
+    this.authorization = options.apiToken === '' ? null : `Basic ${basic}`;
+    this.secrets = options.apiToken === '' ? [] : [options.apiToken, basic];
+    const userAgent = options.userAgent === undefined ? 'jira-timesheets-cli' : options.userAgent;
+    this.headers = {
+      ...(userAgent === null ? {} : { 'User-Agent': userAgent }),
+      ...options.headers,
+    };
+    // Called through a wrapper: browsers refuse a `fetch` detached from `window`.
+    this.fetchImpl = options.fetch ?? ((input, init) => fetch(input, init));
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
@@ -347,10 +359,10 @@ export class JiraRestClient {
       return await this.fetchImpl(url, {
         method,
         headers: {
-          Authorization: this.authorization,
+          ...(this.authorization === null ? {} : { Authorization: this.authorization }),
           Accept: 'application/json',
           'X-Atlassian-Token': 'no-check',
-          'User-Agent': 'jira-timesheets-cli',
+          ...this.headers,
           ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),

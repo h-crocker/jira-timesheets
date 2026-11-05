@@ -1,89 +1,109 @@
 <header class="app-header">
   <h1>Jira Timesheets</h1>
-  <app-week-selector
-    [currentWeek]="currentWeek()"
-    (prevWeek)="setWeek($event)"
-    (nextWeek)="setWeek($event)"
-  />
+  @if (view() === 'week') {
+    <app-week-selector
+      [currentWeek]="currentWeek()"
+      (prevWeek)="setWeek($event)"
+      (nextWeek)="setWeek($event)"
+    />
+  }
   <div class="actions">
-    <button type="button" data-testid="reload" [disabled]="busy()" (click)="reload()">
-      Reload
-    </button>
     <button
       type="button"
-      data-testid="copy-timesheet"
-      title="Copy this week's timesheet to the clipboard as a table"
-      [disabled]="busy()"
-      (click)="copyTimesheet()"
+      data-testid="open-corrections"
+      [class.active]="view() === 'corrections'"
+      (click)="view.set(view() === 'week' ? 'corrections' : 'week')"
     >
-      Copy timesheet
+      {{ view() === 'week' ? 'Corrections' : 'Back to the week' }}
     </button>
-    <button
-      type="button"
-      class="primary"
-      data-testid="sync"
-      [disabled]="busy() || !hasPendingChanges()"
-      (click)="syncWeek()"
-    >
-      Sync week to Jira
-    </button>
+    @if (view() === 'week') {
+      <button type="button" data-testid="reload" [disabled]="busy()" (click)="reload()">
+        Reload
+      </button>
+      <button
+        type="button"
+        data-testid="copy-timesheet"
+        title="Copy this week's timesheet to the clipboard as a table"
+        [disabled]="busy()"
+        (click)="copyTimesheet()"
+      >
+        Copy timesheet
+      </button>
+      <button
+        type="button"
+        class="primary"
+        data-testid="sync"
+        [disabled]="busy() || !hasPendingChanges()"
+        (click)="syncWeek()"
+      >
+        Sync week to Jira
+      </button>
+    }
   </div>
 </header>
 
-@switch (status().kind) {
-  @case ('loading') {
-    <p class="status" data-testid="status">Loading worklogs…</p>
+@if (view() === 'corrections') {
+  @defer (on immediate) {
+    <app-corrections-page />
+  } @loading (after 100ms) {
+    <p class="status">Loading…</p>
   }
-  @case ('filling') {
-    <p class="status" data-testid="status">Reading your activity…</p>
+} @else {
+  @switch (status().kind) {
+    @case ('loading') {
+      <p class="status" data-testid="status">Loading worklogs…</p>
+    }
+    @case ('filling') {
+      <p class="status" data-testid="status">Reading your activity…</p>
+    }
+    @case ('syncing') {
+      <p class="status" data-testid="status">Syncing…</p>
+    }
+    @case ('success') {
+      <p class="status success" data-testid="status">{{ statusMessage() }}</p>
+    }
+    @case ('error') {
+      <p class="status error" role="alert" data-testid="status">{{ statusMessage() }}</p>
+    }
   }
-  @case ('syncing') {
-    <p class="status" data-testid="status">Syncing…</p>
-  }
-  @case ('success') {
-    <p class="status success" data-testid="status">{{ statusMessage() }}</p>
-  }
-  @case ('error') {
-    <p class="status error" role="alert" data-testid="status">{{ statusMessage() }}</p>
-  }
-}
 
-<main class="layout">
-  <section class="calendar">
-    <p class="summary" data-testid="plan-summary">
-      Planned: {{ plan().creations.length }} to create, {{ plan().deletions.length }} to delete
-    </p>
-    <app-calendar-grid
-      [events]="derivedCalendarEvents()"
-      [weekStart]="currentWeek()"
-      [leaveEnabled]="leaveEnabled()"
-      [leaveDays]="leaveDays()"
-      [lockedLeaveDays]="leaveState().locked"
-      (leaveToggled)="toggleLeave($event)"
-    />
-  </section>
-  <aside class="sidebar">
-    <app-settings-panel
-      [settings]="settings()"
-      [credentials]="credentials()"
-      [githubCredentials]="githubCredentials()"
-      [weekAllocations]="weekAllocations()"
-      [weekLabel]="weekLabel()"
-      [weekStart]="currentWeek()"
-      [allocationEvidence]="allocationEvidence()"
-      [busy]="busy()"
-      (fillFromActivity)="fillFromActivity()"
-      (useUsualAllocations)="clearWeekAllocations()"
-      (workHoursChanged)="onWorkHoursChanged($event)"
-      (activitySettingsChanged)="onActivitySettingsChanged($event)"
-      (githubCredentialsChanged)="onGithubCredentialsChanged($event)"
-      (allocationAdded)="onAllocationAdded($event)"
-      (allocationChanged)="onAllocationChanged($event)"
-      (allocationRemoved)="onAllocationRemoved($event)"
-      (spreadPrefixesChanged)="onSpreadPrefixesChanged($event)"
-      (scheduleAdded)="onScheduleAdded($event)"
-      (scheduleRemoved)="onScheduleRemoved($event)"
-      (credentialsChanged)="onCredentialsChanged($event)"
-    />
-  </aside>
-</main>
+  <main class="layout">
+    <section class="calendar">
+      <p class="summary" data-testid="plan-summary">
+        Planned: {{ plan().creations.length }} to create, {{ plan().deletions.length }} to delete
+      </p>
+      <app-calendar-grid
+        [events]="derivedCalendarEvents()"
+        [weekStart]="currentWeek()"
+        [leaveEnabled]="leaveEnabled()"
+        [leaveDays]="leaveDays()"
+        [lockedLeaveDays]="leaveState().locked"
+        (leaveToggled)="toggleLeave($event)"
+      />
+    </section>
+    <aside class="sidebar">
+      <app-settings-panel
+        [settings]="settings()"
+        [credentials]="credentials()"
+        [githubCredentials]="githubCredentials()"
+        [weekAllocations]="weekAllocations()"
+        [weekLabel]="weekLabel()"
+        [weekStart]="currentWeek()"
+        [allocationEvidence]="allocationEvidence()"
+        [busy]="busy()"
+        (fillFromActivity)="fillFromActivity()"
+        (useUsualAllocations)="clearWeekAllocations()"
+        (workHoursChanged)="onWorkHoursChanged($event)"
+        (activitySettingsChanged)="onActivitySettingsChanged($event)"
+        (githubCredentialsChanged)="onGithubCredentialsChanged($event)"
+        (allocationAdded)="onAllocationAdded($event)"
+        (allocationChanged)="onAllocationChanged($event)"
+        (allocationRemoved)="onAllocationRemoved($event)"
+        (spreadPrefixesChanged)="onSpreadPrefixesChanged($event)"
+        (scheduleAdded)="onScheduleAdded($event)"
+        (scheduleRemoved)="onScheduleRemoved($event)"
+        (credentialsChanged)="onCredentialsChanged($event)"
+      />
+    </aside>
+  </main>
+}

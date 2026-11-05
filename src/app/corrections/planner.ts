@@ -732,7 +732,9 @@ export function buildPlan(
       } else {
         const builder = new DayBuilder(correction.date, onDay(correction.date), spec, context);
         ifApplied += builder.current(total.issueKey);
-        blocked.push(correction.date);
+        if (day?.status === 'blocked') {
+          blocked.push(correction.date);
+        }
       }
     }
     checks.push({
