@@ -11,6 +11,15 @@
     </button>
     <button
       type="button"
+      data-testid="copy-timesheet"
+      title="Copy this week's timesheet to the clipboard as a table"
+      [disabled]="busy()"
+      (click)="copyTimesheet()"
+    >
+      Copy timesheet
+    </button>
+    <button
+      type="button"
       class="primary"
       data-testid="sync"
       [disabled]="busy() || !hasPendingChanges()"

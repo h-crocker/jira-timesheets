@@ -36,6 +36,7 @@ import { leaveDayState } from './services/leave-planner';
 import { weekKey } from './services/schedule-time';
 import { SettingsService } from './services/settings.service';
 import { TimesheetEngineService } from './services/timesheet-engine.service';
+import { timesheetTable } from './services/timesheet-table';
 
 /** The current time; tests replace it to plan a week as of a fixed day. */
 export const NOW = new InjectionToken<() => Date>('NOW', { factory: () => () => new Date() });
@@ -402,6 +403,36 @@ export class App {
   clearWeekAllocations(): void {
     this.settingsService.clearWeekAllocations(weekKey(this.currentWeek()));
     this.lastFill.set(null);
+  }
+
+  /**
+   * Copies the week on show to the clipboard as a table of what is logged in Jira now; changes not
+   * yet synced are left out. Rich paste targets get an HTML table; plain-text ones get Markdown.
+   */
+  async copyTimesheet(): Promise<void> {
+    const table = timesheetTable(this.weekWorklogs(), this.currentWeek(), this.weekLabel());
+    try {
+      const clipboard = navigator.clipboard;
+      if (typeof ClipboardItem !== 'undefined' && typeof clipboard.write === 'function') {
+        await clipboard.write([
+          new ClipboardItem({
+            'text/html': new Blob([table.html], { type: 'text/html' }),
+            'text/plain': new Blob([table.text], { type: 'text/plain' }),
+          }),
+        ]);
+      } else {
+        await clipboard.writeText(table.text);
+      }
+      this.status.set({
+        kind: 'success',
+        message: `Copied the timesheet for ${this.weekLabel()} to the clipboard.`,
+      });
+    } catch (error) {
+      this.status.set({
+        kind: 'error',
+        message: `Could not copy the timesheet: ${errorMessage(error)}`,
+      });
+    }
   }
 
   async reload(): Promise<void> {

@@ -106,6 +106,11 @@ To use the mock, enter any token and `http://localhost:3001`. Optionally limit t
 organisations. GitHub is only read when you press the button; without a token, only Jira's automatic
 worklogs are used.
 
+**Copy timesheet**: copies the week on show to the clipboard as a table, one row per issue with the hours
+for each day and totals, as logged in Jira now; changes you have not synced yet are left out. It pastes as
+a formatted table into Outlook,
+Teams, Word, Excel or Confluence, and as a Markdown table into plain-text editors.
+
 ## Test / build
 
 ```bash
@@ -127,6 +132,8 @@ npm run build
   own worklogs are re-planned whenever the settings no longer produce them. A week with its own allocations
   replaces the automatic worklogs too. Either way, a second sync changes nothing.
 - `activity-allocations.ts`: pure functions from a week's evidence to its allocations.
+- `timesheet-table.ts`: pure function from the week's Jira worklogs to the HTML and Markdown tables
+  **Copy timesheet** puts on the clipboard.
 - `SettingsService` / `JiraIntegrationService`: `localStorage` persistence and the `jira.js` client, routed
   through the dev-server relay in the running app. Every worklog the app creates carries a
   `jira-timesheets` worklog property, so it can tell its own worklogs from ones logged by hand or added

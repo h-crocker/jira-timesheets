@@ -370,6 +370,45 @@ describe('App (smart component)', () => {
     expect(recurring.textContent).toContain('Recurring');
   });
 
+  it("copies the week's Jira worklogs to the clipboard, without unsynced changes", async () => {
+    const fixture = await withClash();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    vi.stubGlobal('ClipboardItem', undefined);
+    try {
+      q(fixture, 'copy-timesheet').click();
+      await settle(fixture);
+    } finally {
+      vi.unstubAllGlobals();
+      delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const text: string = writeText.mock.calls[0][0];
+    expect(text).toContain('**Timesheet: Sep 28 – Oct 4**');
+    expect(text).toContain('| GWP-CLASH | Existing entry |');
+    expect(text).not.toContain('Recurring');
+    expect(q(fixture, 'status').textContent).toContain('Copied the timesheet for Sep 28 – Oct 4');
+  });
+
+  it('shows an error when the clipboard refuses the timesheet', async () => {
+    const fixture = await create();
+    await settle(fixture);
+    const writeText = vi.fn().mockRejectedValue(new Error('Permission denied'));
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    vi.stubGlobal('ClipboardItem', undefined);
+    try {
+      q(fixture, 'copy-timesheet').click();
+      await settle(fixture);
+    } finally {
+      vi.unstubAllGlobals();
+      delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+    expect(q(fixture, 'status').textContent).toContain(
+      'Could not copy the timesheet: Permission denied',
+    );
+  });
+
   it('creates the replacement before deleting the clashing worklog', async () => {
     const fixture = await withClash();
     const jira = TestBed.inject(JiraIntegrationService);
