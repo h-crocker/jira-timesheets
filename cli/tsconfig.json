@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["./**/*.ts", "../src/app/corrections/**/*.ts", "../src/app/services/map-limited.ts"],
+  "exclude": ["../src/app/corrections/**/*.spec.ts"]
+}

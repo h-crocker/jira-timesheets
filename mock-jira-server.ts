@@ -79,6 +79,19 @@ const usersById = new Map<string, MockUser>();
 // User properties by account id, then property key.
 const userProperties = new Map<string, Map<string, unknown>>();
 let activeServer: Server | null = null;
+// The dev user's profile time zone, which Jira writes dates in.
+let userTimeZone = 'Etc/UTC';
+// Issues that refuse worklog changes: 'status' is a closed, non-editable workflow status (editmeta
+// shows no fields), 'period' a closed timesheet period that only shows up when a write is refused.
+const lockedIssues = new Map<string, 'status' | 'period'>();
+// Every worklog write, with its query parameters, so tests can check what was sent.
+const writeLog: {
+  method: string;
+  issueKey: string;
+  worklogId?: string;
+  query: Record<string, string>;
+}[] = [];
+const ADJUST_ESTIMATE = new Set(['new', 'leave', 'manual', 'auto']);
 
 function issueExists(issueKey: string): boolean {
   return issueIds.has(issueKey) || issueKey in ISSUE_SUMMARIES;
@@ -103,12 +116,38 @@ function registerUser(user: MockUser): MockUser {
   return user;
 }
 
+// Like Jira Cloud, `started` and friends are written with the profile time zone's offset.
 function formatAtlassianDate(date: Date): string {
   const pad = (value: number, width = 2) => String(value).padStart(width, '0');
+  const parts: Record<string, number> = {};
+  for (const part of new Intl.DateTimeFormat('en-GB', {
+    timeZone: userTimeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date)) {
+    if (part.type !== 'literal') {
+      parts[part.type] = Number(part.value);
+    }
+  }
+  const wall = Date.UTC(
+    parts['year'],
+    parts['month'] - 1,
+    parts['day'],
+    parts['hour'] % 24,
+    parts['minute'],
+    parts['second'],
+  );
+  const offset = Math.round((wall - Math.floor(date.getTime() / 1000) * 1000) / 60000);
+  const abs = Math.abs(offset);
   return (
-    `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}` +
-    `T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}` +
-    `.${pad(date.getUTCMilliseconds(), 3)}+0000`
+    `${parts['year']}-${pad(parts['month'])}-${pad(parts['day'])}` +
+    `T${pad(parts['hour'] % 24)}:${pad(parts['minute'])}:${pad(parts['second'])}` +
+    `.${pad(date.getUTCMilliseconds(), 3)}${offset < 0 ? '-' : '+'}${pad(Math.floor(abs / 60))}${pad(abs % 60)}`
   );
 }
 
@@ -212,7 +251,7 @@ function addWorklog(
   return worklog;
 }
 
-function resetMockJira(): void {
+function resetMockJira(scenario: string = process.env['MOCK_SCENARIO'] ?? ''): void {
   worklogIdCounter = 10001;
   userIdCounter = 100;
   issueIds.clear();
@@ -220,8 +259,15 @@ function resetMockJira(): void {
   usersByEmail.clear();
   usersById.clear();
   userProperties.clear();
+  lockedIssues.clear();
+  writeLog.length = 0;
+  userTimeZone = 'Etc/UTC';
   registerUser(DEV_USER);
   registerUser(COLLEAGUE);
+  if (scenario === 'corrections-example') {
+    seedCorrectionsExample();
+    return;
+  }
 
   addWorklog('GWP-2070', DEV_USER, new Date('2026-09-28T09:00:00Z'), 5400, 'Work on feature');
   addWorklog('GWP-2070', DEV_USER, new Date('2026-09-29T09:00:00Z'), 7200, 'Code review');
@@ -248,7 +294,7 @@ function renderUser(base: string, version: ApiVersion, user: MockUser): object {
     avatarUrls: { '48x48': AVATAR, '24x24': AVATAR, '16x16': AVATAR, '32x32': AVATAR },
     displayName: user.displayName,
     active: true,
-    timeZone: 'Etc/UTC',
+    timeZone: user === DEV_USER ? userTimeZone : 'Etc/UTC',
     accountType: 'atlassian',
   };
 }
@@ -463,6 +509,35 @@ async function handleWorklogs(
     .flatMap((value) => value.split(','))
     .map((value) => value.trim());
 
+  if (method === 'POST' || method === 'PUT' || method === 'DELETE') {
+    writeLog.push({
+      method,
+      issueKey,
+      ...(worklogId === undefined ? {} : { worklogId }),
+      query: Object.fromEntries(url.searchParams.entries()),
+    });
+    const adjust = url.searchParams.get('adjustEstimate');
+    if (adjust !== null && !ADJUST_ESTIMATE.has(adjust)) {
+      sendErrors(res, 400, [], { adjustEstimate: 'Must be one of new, leave, manual or auto' });
+      return;
+    }
+    if (url.searchParams.has('overrideEditableFlag')) {
+      sendErrors(res, 403, [
+        'Only apps with the Administer Jira permission can override the editable flag.',
+      ]);
+      return;
+    }
+    const lock = lockedIssues.get(issueKey);
+    if (lock !== undefined) {
+      sendErrors(res, 400, [
+        lock === 'status'
+          ? 'Worklogs cannot be changed: the issue is in a non-editable status.'
+          : 'Worklog cannot be changed because the timesheet period is closed.',
+      ]);
+      return;
+    }
+  }
+
   if (method === 'GET' && worklogId === undefined) {
     const startedAfter = parseNonNegativeInt(url.searchParams.get('startedAfter'));
     const startedBefore = parseNonNegativeInt(url.searchParams.get('startedBefore'));
@@ -539,13 +614,71 @@ async function handleWorklogs(
   }
 
   const index = worklogs.findIndex((worklog) => worklog.id === worklogId);
-  if ((method === 'GET' || method === 'DELETE') && index === -1) {
+  if ((method === 'GET' || method === 'DELETE' || method === 'PUT') && index === -1) {
     sendErrors(res, 404, ['Worklog not found']);
     return;
   }
 
   if (method === 'GET') {
     sendJson(res, 200, renderWorklog(base, version, worklogs[index], expand));
+    return;
+  }
+
+  if (method === 'PUT') {
+    // Most users hold "Edit own worklogs" but not "Edit all worklogs".
+    const worklog = worklogs[index];
+    if (worklog.authorId !== me.accountId) {
+      sendErrors(res, 403, ['You do not have the permission to edit this worklog.']);
+      return;
+    }
+    const body = await readJsonBody(req);
+    if (body === null) {
+      sendErrors(res, 400, ['Request body must be a JSON object']);
+      return;
+    }
+    const errors: Record<string, string> = {};
+    const { started, timeSpentSeconds, comment } = body;
+    if (
+      started !== undefined &&
+      (typeof started !== 'string' ||
+        !JIRA_DATE_TIME.test(started) ||
+        Number.isNaN(Date.parse(started)))
+    ) {
+      errors['started'] = "Expected yyyy-MM-dd'T'HH:mm:ss.SSSZ, e.g. 2026-09-28T09:00:00.000+0000";
+    }
+    if (
+      timeSpentSeconds !== undefined &&
+      (typeof timeSpentSeconds !== 'number' ||
+        !Number.isFinite(timeSpentSeconds) ||
+        timeSpentSeconds <= 0)
+    ) {
+      errors['timeSpentSeconds'] = 'Must be a positive number of seconds';
+    }
+    let text: string | undefined;
+    if (comment !== undefined) {
+      if (version === '2' && typeof comment === 'string') {
+        text = comment;
+      } else if (version === '3' && isAdfDocument(comment)) {
+        text = adfText(comment);
+      } else {
+        errors['comment'] =
+          version === '3' ? 'Must be an Atlassian Document Format document' : 'Must be a string';
+      }
+    }
+    if (Object.keys(errors).length > 0) {
+      sendErrors(res, 400, [], errors);
+      return;
+    }
+    if (typeof started === 'string') {
+      worklog.started = new Date(started);
+    }
+    if (typeof timeSpentSeconds === 'number') {
+      worklog.timeSpentSeconds = timeSpentSeconds;
+    }
+    if (text !== undefined) {
+      worklog.comment = text;
+    }
+    sendJson(res, 200, renderWorklog(base, version, worklog, expand));
     return;
   }
 
@@ -665,6 +798,53 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return;
   }
 
+  if (url.pathname === '/rest/api/3/mypermissions' && req.method === 'GET') {
+    const permissions = (url.searchParams.get('permissions') ?? '').split(',').filter(Boolean);
+    const issueKey = url.searchParams.get('issueKey');
+    if (permissions.length === 0) {
+      sendErrors(res, 400, ['The permissions query parameter is required.']);
+      return;
+    }
+    if (issueKey !== null && !issueExists(issueKey)) {
+      sendErrors(res, 404, ['Issue does not exist or you do not have permission to see it.']);
+      return;
+    }
+    // Like Jira, permissions don't reflect a non-editable workflow status; editmeta does.
+    sendJson(res, 200, {
+      permissions: Object.fromEntries(
+        permissions.map((key) => [
+          key,
+          { id: key, key, name: key, type: 'PROJECT', description: '', havePermission: true },
+        ]),
+      ),
+    });
+    return;
+  }
+
+  const editmeta = url.pathname.match(/^\/rest\/api\/[23]\/issue\/([^/]+)\/editmeta$/);
+  if (editmeta !== null && req.method === 'GET') {
+    const key = decodeURIComponent(editmeta[1]);
+    if (!issueExists(key)) {
+      sendErrors(res, 404, ['Issue does not exist or you do not have permission to see it.']);
+      return;
+    }
+    sendJson(res, 200, {
+      fields:
+        lockedIssues.get(key) === 'status'
+          ? {}
+          : {
+              summary: {
+                required: true,
+                name: 'Summary',
+                key: 'summary',
+                operations: ['set'],
+                schema: { type: 'string', system: 'summary' },
+              },
+            },
+    });
+    return;
+  }
+
   const issue = url.pathname.match(/^\/rest\/api\/[23]\/issue\/([^/]+)$/);
   if (issue !== null && req.method === 'GET') {
     handleIssue(res, url, base, decodeURIComponent(issue[1]));
@@ -732,7 +912,217 @@ function stopServer(server: Server = activeServer as Server): Promise<void> {
   });
 }
 
+/** Makes an issue refuse worklog changes, as a closed status or a closed timesheet period. */
+function lockIssue(issueKey: string, kind: 'status' | 'period' = 'status'): void {
+  lockedIssues.set(issueKey, kind);
+}
+
+/** Lifts every lock, keeping the worklogs as they are. */
+function unlockAll(): void {
+  lockedIssues.clear();
+}
+
+/** The worklog writes received since the last reset. */
+function writes(): typeof writeLog {
+  return writeLog.map((entry) => ({ ...entry, query: { ...entry.query } }));
+}
+
+// A made-up June–August 2026 timesheet in Europe/London that matches corrections/example.json, so
+// `npm run timesheets` can be rehearsed end to end. MOCK_SCENARIO=corrections-example starts with it.
+function seedCorrectionsExample(): void {
+  userTimeZone = 'Europe/London';
+  // British Summer Time covers all of June, July and August.
+  const log = (
+    date: string,
+    time: string,
+    issueKey: string,
+    hours: number,
+    comment: string,
+    author = DEV_USER,
+  ) =>
+    addWorklog(
+      issueKey,
+      author,
+      new Date(`${date}T${time}:00+01:00`),
+      Math.round(hours * 3600),
+      comment,
+    );
+  const leave = (date: string) => log(date, '00:00', 'LEAVE-1', 7.5, 'Annual leave');
+  type Entry = [time: string, issueKey: string, hours: number, comment: string];
+  const days: Record<string, Entry[]> = {
+    '2026-06-09': [
+      ['09:00', 'OPS-7', 0.25, 'stand-up'],
+      ['09:15', 'APP-110', 3.5, 'Payment retries'],
+      ['13:45', 'APP-110', 3, 'Payment retries'],
+      ['16:45', 'OPS-7', 0.75, 'Stand-up follow-ups with QA'],
+    ],
+    '2026-06-10': [
+      ['09:00', 'OPS-7', 0.25, 'stand-up'],
+      ['09:15', 'OPS-7', 3.75, 'Release prep'],
+      ['13:45', 'APP-110', 3.5, 'Payment retries'],
+    ],
+    '2026-06-12': [
+      ['09:00', 'APP-110', 3, 'Payment retries'],
+      ['12:00', 'OPS-7', 1, 'General project work'],
+      ['13:45', 'LEAVE-1', 3.5, 'Sick'],
+    ],
+    '2026-06-22': [['10:00', 'OPS-9', 0.75, 'Incident follow-up']],
+    '2026-06-23': [
+      // Logged against midnight, as some leave tools do: 23:00 UTC the day before.
+      ['00:00', 'LEAVE-1', 3.25, 'Sick leave'],
+      ['09:00', 'APP-171', 2, 'Refund API'],
+      ['11:00', 'APP-236', 2.25, 'Search filters'],
+    ],
+    '2026-06-24': [
+      ['09:00', 'OPS-7', 0.25, 'Daily stand-up'],
+      ['09:15', 'APP-171', 1.75, 'Refund API'],
+      ['11:00', 'APP-236', 2.25, 'Search filters'],
+      ['13:45', 'LEAVE-1', 3.25, 'Sick'],
+    ],
+    '2026-06-25': [
+      ['09:00', 'APP-171', 0.75, 'Refund API'],
+      ['09:45', 'APP-236', 3, 'Search filters'],
+      ['12:00', 'APP-171', 0.75, 'Refund API review fixes'],
+      ['13:45', 'LEAVE-1', 3, 'Sick - migraine'],
+    ],
+    '2026-06-26': [
+      ['09:00', 'APP-236', 1.75, 'Search filters'],
+      ['10:45', 'APP-171', 2.5, 'Refund API'],
+      ['13:45', 'LEAVE-1', 3.25, 'Sick leave'],
+    ],
+    '2026-07-10': [
+      ['09:00', 'APP-293', 2.5, 'Invoice export'],
+      ['11:30', 'APP-176', 2, 'Bug triage'],
+      ['13:45', 'LEAVE-1', 3.5, 'Sick leave'],
+    ],
+    '2026-07-15': [
+      ['09:00', 'APP-293', 2, 'Invoice export'],
+      ['11:00', 'APP-176', 2.25, 'Bug triage'],
+      ['13:45', 'LEAVE-1', 3.5, 'Sick leave'],
+    ],
+    '2026-07-16': [
+      ['09:00', 'APP-293', 1.25, 'Invoice export'],
+      ['10:15', 'APP-176', 3.75, 'Bug triage'],
+      ['13:45', 'LEAVE-1', 3.25, 'Sick leave'],
+    ],
+    '2026-07-17': [
+      ['09:00', 'APP-293', 2, 'Invoice export'],
+      ['11:00', 'APP-176', 2.5, 'Bug triage'],
+      ['13:45', 'LEAVE-1', 3.5, 'Sick leave'],
+    ],
+    '2026-07-20': [
+      ['09:00', 'APP-176', 1.5, 'Bug triage'],
+      ['10:30', 'APP-241', 2.75, 'Reporting dashboard'],
+      ['13:45', 'LEAVE-1', 3.5, 'Sick leave'],
+    ],
+    '2026-07-22': [
+      // Logged against midnight, as some leave tools do: 23:00 UTC the day before.
+      ['00:00', 'LEAVE-1', 3.5, 'Sick leave'],
+      ['09:00', 'APP-176', 2, 'Bug triage'],
+      ['11:00', 'APP-241', 2.25, 'Reporting dashboard'],
+    ],
+    '2026-07-23': [
+      ['09:00', 'APP-176', 0.5, 'Bug triage'],
+      ['09:30', 'APP-241', 3.5, 'Reporting dashboard'],
+      ['13:45', 'LEAVE-1', 3.5, 'Sick leave'],
+    ],
+    '2026-07-24': [
+      ['09:00', 'APP-241', 1.75, 'Reporting dashboard'],
+      ['10:45', 'APP-176', 2.5, 'Bug triage'],
+      ['13:45', 'LEAVE-1', 3.5, 'Sick leave'],
+    ],
+    '2026-07-29': [
+      ['09:00', 'APP-380', 3.25, 'Alerting'],
+      ['13:15', 'APP-395', 4.25, 'Data migration'],
+    ],
+    '2026-07-30': [
+      ['09:00', 'APP-380', 3.75, 'Alerting'],
+      ['13:45', 'APP-395', 3.75, 'Data migration'],
+    ],
+    '2026-07-31': [
+      ['09:00', 'APP-380', 3, 'Alerting'],
+      ['13:00', 'APP-395', 4.5, 'Data migration'],
+    ],
+    '2026-08-04': [
+      ['09:00', 'OPS-7', 0.25, 'Daily stand-up'],
+      ['09:15', 'APP-241', 3.5, 'Reporting dashboard'],
+      ['13:45', 'APP-241', 1.75, 'Reporting dashboard'],
+      ['15:30', 'APP-176', 2, 'Bug triage'],
+    ],
+    '2026-08-05': [
+      ['09:00', 'OPS-7', 0.25, 'Daily stand-up'],
+      ['09:15', 'APP-241', 4.25, 'Reporting dashboard'],
+      ['14:30', 'APP-380', 3, 'Alerting'],
+    ],
+  };
+  const leaveDays = new Set([
+    '2026-06-15',
+    '2026-06-17',
+    '2026-06-18',
+    '2026-06-19',
+    '2026-06-22',
+    '2026-06-29',
+    '2026-06-30',
+    '2026-07-01',
+    '2026-07-02',
+    '2026-07-03',
+    '2026-07-06',
+    '2026-08-03',
+  ]);
+  // The ticket worked on in each week, for ordinary days.
+  const weekTicket: Record<string, string> = {
+    '2026-06-08': 'APP-110',
+    '2026-06-15': 'APP-110',
+    '2026-06-22': 'APP-171',
+    '2026-06-29': 'APP-171',
+    '2026-07-06': 'APP-293',
+    '2026-07-13': 'APP-293',
+    '2026-07-20': 'APP-176',
+    '2026-07-27': 'APP-395',
+    '2026-08-03': 'APP-241',
+  };
+  let monday = '';
+  for (
+    let day = new Date(Date.UTC(2026, 5, 8));
+    day <= new Date(Date.UTC(2026, 7, 5));
+    day.setUTCDate(day.getUTCDate() + 1)
+  ) {
+    const date = day.toISOString().slice(0, 10);
+    const weekday = day.getUTCDay();
+    if (weekday === 1) {
+      monday = date;
+    }
+    if (weekday === 0 || weekday === 6) {
+      continue;
+    }
+    if (leaveDays.has(date)) {
+      leave(date);
+    }
+    if (days[date] !== undefined) {
+      for (const [time, issueKey, hours, comment] of days[date]) {
+        log(date, time, issueKey, hours, comment);
+      }
+    } else if (!leaveDays.has(date)) {
+      log(date, '09:00', 'OPS-7', 0.25, 'Daily stand-up');
+      log(date, '09:15', weekTicket[monday], 3.5, 'Development');
+      log(date, '13:45', weekTicket[monday], 3.75, 'Development');
+    }
+  }
+  // Colleagues log to the same tickets; none of it is ours.
+  log('2026-06-10', '00:00', 'LEAVE-1', 7.5, 'Annual leave', COLLEAGUE);
+  log('2026-07-30', '10:00', 'APP-395', 2, 'Pairing on migration', COLLEAGUE);
+  lockIssue('OPS-9', 'status');
+}
+
+function lockFromEnv(): void {
+  for (const item of (process.env['MOCK_LOCKED'] ?? '').split(',').filter(Boolean)) {
+    const [key, kind] = item.split(':');
+    lockIssue(key.trim(), kind === 'period' ? 'period' : 'status');
+  }
+}
+
 resetMockJira();
+lockFromEnv();
 
 if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.main === module) {
   startServer().then((server) => {
@@ -742,4 +1132,4 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   });
 }
 
-export = { startServer, stopServer, resetMockJira };
+export = { startServer, stopServer, resetMockJira, lockIssue, unlockAll, writes };

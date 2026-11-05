@@ -1,0 +1,113 @@
+{
+  "name": "Example corrections",
+  "timeZone": "Europe/London",
+  "expectedDayHours": 7.5,
+  "maxDayHours": 7.5,
+  "lockedIssues": {
+    "OPS-9": "Locked; never edit (example)"
+  },
+  "protect": [
+    {
+      "issueKey": "LEAVE-1",
+      "dates": ["2026-06-15", "2026-06-17..2026-06-22", "2026-06-29..2026-07-06", "2026-08-03"],
+      "commentPattern": "annual|holiday|vacation|\\bA/?L\\b",
+      "reason": "Annual leave"
+    }
+  ],
+  "days": [
+    {
+      "date": "2026-06-10",
+      "set": [
+        { "issueKey": "LEAVE-1", "from": 0, "to": 3.5, "comment": "Sick leave" },
+        { "issueKey": "APP-110", "from": 3.5, "to": 0 }
+      ]
+    },
+    {
+      "date": "2026-07-10",
+      "set": [{ "issueKey": "APP-293", "from": 2.5, "to": 2 }]
+    },
+    {
+      "date": "2026-07-15",
+      "set": [{ "issueKey": "APP-293", "from": 2, "to": 1.75 }]
+    },
+    {
+      "date": "2026-07-16",
+      "set": [{ "issueKey": "APP-293", "from": 1.25, "to": 0.5 }]
+    },
+    {
+      "date": "2026-07-17",
+      "set": [{ "issueKey": "APP-293", "from": 2, "to": 1.5 }]
+    },
+    {
+      "date": "2026-07-20",
+      "set": [
+        { "issueKey": "LEAVE-1", "from": 3.5, "to": 4.75, "comment": "Sick leave" },
+        { "issueKey": "APP-176", "from": 1.5, "to": 0 }
+      ]
+    },
+    {
+      "date": "2026-07-22",
+      "set": [
+        { "issueKey": "LEAVE-1", "from": 3.5, "to": 5.25, "comment": "Sick leave" },
+        { "issueKey": "APP-176", "from": 2, "to": 0 }
+      ]
+    },
+    {
+      "date": "2026-07-23",
+      "set": [
+        { "issueKey": "LEAVE-1", "from": 3.5, "to": 4, "comment": "Sick leave" },
+        { "issueKey": "APP-176", "from": 0.5, "to": 0 }
+      ]
+    },
+    {
+      "date": "2026-07-24",
+      "set": [{ "issueKey": "APP-241", "from": 1.75, "to": 1.5 }]
+    },
+    {
+      "date": "2026-07-29",
+      "set": [
+        { "issueKey": "LEAVE-1", "from": 0, "to": 3.75, "comment": "Sick leave" },
+        { "issueKey": "APP-395", "from": 4.25, "to": 0.5 }
+      ]
+    },
+    {
+      "date": "2026-07-30",
+      "set": [
+        { "issueKey": "LEAVE-1", "from": 0, "to": 3.75, "comment": "Sick leave" },
+        { "issueKey": "APP-395", "from": 3.75, "to": 0 }
+      ]
+    },
+    {
+      "date": "2026-07-31",
+      "set": [
+        { "issueKey": "LEAVE-1", "from": 0, "to": 3.75, "comment": "Sick leave" },
+        { "issueKey": "APP-395", "from": 4.5, "to": 0.75 }
+      ]
+    },
+    {
+      "date": "2026-08-04",
+      "move": [{ "from": "APP-241", "to": "APP-380", "hours": 5.25 }]
+    },
+    {
+      "date": "2026-08-05",
+      "move": [{ "from": "APP-241", "to": "APP-380", "hours": 2.75 }]
+    }
+  ],
+  "checks": {
+    "issueTotals": [
+      { "issueKey": "LEAVE-1", "hours": 28.75, "label": "Sick leave on the days changed" }
+    ],
+    "dayTotals": [
+      {
+        "date": "2026-06-22",
+        "hours": 8.25,
+        "reason": "Stays at 8.25h because of the locked OPS-9 entry; report only"
+      }
+    ]
+  },
+  "validate": {
+    "from": "2026-06-08",
+    "to": "2026-08-05",
+    "leaveIssueKeys": ["LEAVE-1"]
+  }
+}

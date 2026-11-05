@@ -111,6 +111,71 @@ for each day and totals, as logged in Jira now; changes you have not synced yet 
 a formatted table into Outlook,
 Teams, Word, Excel or Confluence, and as a Markdown table into plain-text editors.
 
+## Correcting past worklogs (command line)
+
+For one-off fixes to weeks already logged (adding sick leave, moving time between tickets,
+rewording comments) there is a command line tool. It talks to Jira directly from Node, so it needs
+no dev server:
+
+```bash
+npm run timesheets -- plan corrections/my-fixes.json             # read-only dry run
+npm run timesheets -- apply <plan.json> --approve <planId> --allow-deletions
+npm run timesheets -- verify <plan.json>
+npm run timesheets -- report --from 2026-06-01 --to 2026-06-30 --format csv --out june.csv
+npm run timesheets -- validate --from 2026-06-01 --to 2026-06-30 --leave LEAVE-1 [--github]
+npm run timesheets -- locked                                       # tickets found to refuse changes
+```
+
+**Credentials.** Set `JIRA_HOST` (e.g. `https://your-site.atlassian.net`) and `JIRA_EMAIL`, or put
+`host` and `email` in `.timesheets/config.json`. The API token comes from `JIRA_API_TOKEN`, the macOS
+Keychain (`security add-generic-password -s jira-timesheets -a <email> -w`, which asks for it without
+echoing), or a hidden prompt. The token is never written to disk, printed or logged, and is only sent
+to `*.atlassian.net` or a local mock. To try it against the mock, run
+`MOCK_SCENARIO=corrections-example npm run mock-server` (a made-up timesheet that
+`corrections/example.json` applies to) with `JIRA_HOST=http://localhost:3000 JIRA_EMAIL=dev@example.com
+JIRA_API_TOKEN=any`.
+
+**The corrections file** (see `corrections/example.json`; your own files in `corrections/` are
+git-ignored, as they describe your time off) lists, per day, each ticket's hours
+before and after (`set`) or time to move between tickets (`move`), plus protected worklogs (e.g.
+annual leave, by date or comment), tickets known to be locked, comment rewrites and totals to check.
+Hours are quarter hours. Dates are days in your Jira profile's time zone, which is what Jira shows.
+
+**`plan`** reads your worklogs and shows, for every day, each worklog it would edit, create or
+delete, and the day's hours before and after. It changes nothing. The table is applied as written: a
+day that wouldn't come to the expected hours, or a ticket that looks locked (no worklog permission, or
+a non-editable workflow status), is flagged under **Check before approving** but still planned. Time
+is never padded. A day is only **blocked**, and never applied, if Jira's hours on a ticket differ
+from the file's "from" (the table no longer describes it), it touches a protected worklog, or it
+changes a ticket the file lists as locked. When a ticket has several worklogs on a day, more time
+extends the latest one, less time shrinks from the latest back (deleting any it empties), and new
+worklogs start where the time they replace was freed. Plans are saved in `.timesheets/plans/`.
+
+**`apply`** needs the plan id, and `--allow-deletions` when the plan deletes anything. It backs up
+every worklog on the affected days (raw JSON from Jira) to `.timesheets/backups/` first, and edits
+worklogs in place without sending `started`, so start times and days can't move. Every write sends
+`adjustEstimate=leave` and `notifyUsers=false`. Every change is either made or recorded: if Jira
+refuses to shorten or delete a worklog (a locked ticket, a closed period), or the worklog changed
+since the plan, that is written to `.timesheets/logs/<planId>-not-changed.md` and the rest of the day
+still goes ahead, so sick leave is added even if the day then comes to more than its hours. A move
+creates the new worklog before shortening the old one, so a refusal never loses time. A sick-leave
+worklog isn't added if one appeared on that ticket and day since the plan. Only failures that aren't
+about one change (bad credentials, Jira unavailable, the network) stop the run. Running it again is
+safe and retries what was refused: edits already made and deletions already done are skipped, and
+new worklogs carry a `jira-timesheets.correction` property so they're never created twice. Refusals
+that read like a lock (or are a 403) are recorded in `.timesheets/locked-issues.json`, and later
+plans warn about the ticket. Exit codes: 0 done, 4 finished with changes not made, 1 stopped,
+2 refused.
+
+**`verify`** fetches the worklogs again and checks every day, every changed worklog and the plan's
+totals, reporting changes the apply log says weren't made separately from anything unexpected.
+**`report`** prints each week by ticket and day as Markdown or CSV. **`validate`** flags days over or
+under the expected hours, work on leave days, time on locked tickets and, with `--github`
+(`GITHUB_TOKEN` or a Keychain item `jira-timesheets-github`), time logged after an issue's pull
+request merged.
+
+`.timesheets/` is git-ignored: it holds your worklogs.
+
 ## Test / build
 
 ```bash
@@ -148,5 +213,9 @@ npm run build
   with `expand=properties`), user properties, issue lookups, the JQL the app sends, no CORS
   headers, and refusing writes sent with a browser's user agent. Its tests check its responses against
   `jira.js`'s own schemas, and `proxy.conf.spec.ts` checks what the relay sends Jira.
+- `src/app/corrections/`: the correction planner, applier, verifier, validation and report, as
+  plain TypeScript with no Angular or Node dependency, and `cli/timesheets.ts`, the command line
+  around them. Days are worked out in the Jira profile's time zone (`time-zone.ts`), not the
+  machine's.
 - `mock-github-server.ts` serves the GitHub endpoints the app reads, with Link-header pagination and CORS
   headers like GitHub's.
