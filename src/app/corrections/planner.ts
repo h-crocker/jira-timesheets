@@ -107,8 +107,11 @@ class DayBuilder {
   /** Things that may not go to plan, which don't stop the day: shown first in the dry run. */
   readonly warnings: string[] = [];
   readonly notes: string[] = [];
-  /** Each move's source worklogs, which are only reduced once its new worklogs exist. */
-  private readonly moveLinks: { sourceIds: string[]; creates: CreateOp[] }[] = [];
+  /**
+   * Worklogs only changed once other changes have been made: a move's source once its new
+   * worklogs exist, and extra sick-leave worklogs once the one kept has all the time.
+   */
+  private readonly links: { dependentIds: string[]; prerequisites: Op[] }[] = [];
   /** Pending edits by worklog id; merged so one worklog gets at most one PUT. */
   private readonly updates = new Map<string, UpdateOp>();
   private readonly deletes = new Map<string, DeleteOp>();
@@ -337,9 +340,9 @@ class DayBuilder {
     // The new worklogs are created first, and the source only reduced once they exist, so a
     // refusal can leave the day over (and logged) but never loses time.
     const slots = this.reduce(change.fromIssueKey, change.seconds, why);
-    this.moveLinks.push({
-      sourceIds: slots.map((slot) => slot.worklogId),
-      creates: slots.map((slot) =>
+    this.links.push({
+      dependentIds: slots.map((slot) => slot.worklogId),
+      prerequisites: slots.map((slot) =>
         this.create(
           change.toIssueKey,
           slot.startMs,
@@ -349,6 +352,99 @@ class DayBuilder {
         ),
       ),
     });
+  }
+
+  /**
+   * Sick leave as one uninterrupted worklog at the end of the day, fitted round what is left once
+   * every other change on the day is worked out: it ends when the day's last worklog used to end,
+   * reaching back as far as it needs, or starts when the remaining work ends if that would overlap
+   * it. Work keeps its start times. Several sick worklogs become one: the latest is kept and moved,
+   * and the others are deleted only once it holds all the time.
+   */
+  placeSickLeave(change: SetChange): void {
+    if (change.toSeconds === 0 || change.toSeconds === change.fromSeconds) {
+      this.applySet(change);
+      return;
+    }
+    this.checkLocked(change.issueKey);
+    this.checkProtected(change.issueKey);
+    const current = this.current(change.issueKey);
+    if (current !== change.fromSeconds && current === change.toSeconds) {
+      this.notes.push(`Already corrected: ${change.issueKey} is ${h(current)}.`);
+      return;
+    }
+    if (current !== change.fromSeconds) {
+      this.problems.push(
+        `Jira has ${h(current)} on ${change.issueKey}, but the corrections file expects ${h(change.fromSeconds)}.`,
+      );
+      return;
+    }
+    const zone = this.context.timeZone;
+    const sick = this.editable(change.issueKey);
+    const left = (worklog: OwnWorklog) => this.remaining.get(worklog.id) ?? worklog.seconds;
+    const others = this.worklogs.filter(
+      (worklog) => !sick.includes(worklog) && !this.deletes.has(worklog.id) && left(worklog) > 0,
+    );
+    const workEnd =
+      others.length === 0 ? null : Math.max(...others.map((w) => w.startedMs + left(w) * 1000));
+    const usualEnd =
+      this.worklogs.length === 0
+        ? zonedTimeToMs(this.date, this.spec.defaultStartTime, zone) + change.toSeconds * 1000
+        : Math.max(...this.worklogs.map((w) => w.startedMs + w.seconds * 1000));
+    let start = usualEnd - change.toSeconds * 1000;
+    const end = () => timeInZone(start + change.toSeconds * 1000, zone);
+    if (workEnd !== null && start < workEnd) {
+      start = workEnd;
+      this.notes.push(
+        `Sick leave is one block, ${timeInZone(start, zone)}–${end()}: it starts when the remaining work ends, as ending at the usual ${timeInZone(usualEnd, zone)} would overlap work.`,
+      );
+    } else {
+      this.notes.push(
+        `Sick leave is one block, ${timeInZone(start, zone)}–${end()}, ending when the day used to end.`,
+      );
+    }
+    if (dateKeyInZone(start, zone) !== this.date) {
+      this.problems.push(
+        `The sick-leave block would start on ${dateKeyInZone(start, zone)}, not ${this.date}.`,
+      );
+    }
+    const why = `${change.issueKey} ${h(change.fromSeconds)} → ${h(change.toSeconds)}, one block at the end of the day`;
+    const [keep, ...extras] = sick;
+    if (keep === undefined) {
+      this.create(change.issueKey, start, change.toSeconds, change.comment ?? '', why);
+      return;
+    }
+    const update: UpdateOp = {
+      kind: 'update',
+      opId: '',
+      issueKey: keep.issueKey,
+      worklogId: keep.id,
+      started: keep.started,
+      before: { seconds: keep.seconds, comment: keep.comment },
+      after: {
+        seconds: change.toSeconds,
+        comment: change.comment ?? keep.comment,
+        ...(start === keep.startedMs ? {} : { started: formatJiraStarted(start, zone) }),
+      },
+      why,
+    };
+    this.updates.set(keep.id, update);
+    this.remaining.set(keep.id, change.toSeconds);
+    for (const extra of extras) {
+      this.remaining.set(extra.id, 0);
+      this.deletes.set(extra.id, {
+        kind: 'delete',
+        opId: '',
+        issueKey: extra.issueKey,
+        worklogId: extra.id,
+        started: extra.started,
+        before: { seconds: extra.seconds, comment: extra.comment },
+        why: `merged into the one ${change.issueKey} worklog ${keep.id}`,
+      });
+    }
+    if (extras.length > 0) {
+      this.links.push({ dependentIds: extras.map((extra) => extra.id), prerequisites: [update] });
+    }
   }
 
   placeCreates(): void {
@@ -412,15 +508,18 @@ class DayBuilder {
     const ops: Op[] = [
       ...this.deletes.values(),
       ...[...this.updates.values()].filter(
-        (op) => op.after.seconds !== op.before.seconds || op.after.comment !== op.before.comment,
+        (op) =>
+          op.after.seconds !== op.before.seconds ||
+          op.after.comment !== op.before.comment ||
+          op.after.started !== undefined,
       ),
       ...this.creates,
     ];
     ops.forEach((op, i) => (op.opId = `${this.date}#${i + 1}`));
-    for (const link of this.moveLinks) {
+    for (const link of this.links) {
       for (const op of ops) {
-        if (op.kind !== 'create' && link.sourceIds.includes(op.worklogId)) {
-          op.requires = link.creates.map((create) => create.opId);
+        if (op.kind !== 'create' && link.dependentIds.includes(op.worklogId)) {
+          op.requires = link.prerequisites.map((prerequisite) => prerequisite.opId);
         }
       }
     }
@@ -443,9 +542,19 @@ export function projectWorklogs(
     .filter((worklog) => !deleted.has(worklog.id))
     .map((worklog) => {
       const update = updates.get(worklog.id);
-      return update === undefined
-        ? worklog
-        : { ...worklog, seconds: update.after.seconds, comment: update.after.comment };
+      if (update === undefined) {
+        return worklog;
+      }
+      const moved = update.after.started;
+      const startedMs = moved === undefined ? worklog.startedMs : parseJiraDateTime(moved);
+      return {
+        ...worklog,
+        seconds: update.after.seconds,
+        comment: update.after.comment,
+        started: moved ?? worklog.started,
+        startedMs,
+        date: dateKeyInZone(startedMs, timeZone),
+      };
     });
   for (const op of ops) {
     if (op.kind === 'create') {
@@ -486,10 +595,17 @@ export function buildPlan(
     const correction = spec.days.find((day) => day.date === date);
     const changes: Change[] = correction?.changes ?? [];
     const expectedBefore: Record<string, number> = {};
-    for (const change of changes) {
+    // Sick leave goes last, so it fits round the day as the other changes leave it.
+    const isSick = (change: Change) =>
+      change.kind === 'set' && change.issueKey === spec.sickLeave?.issueKey;
+    for (const change of [...changes.filter((c) => !isSick(c)), ...changes.filter(isSick)]) {
       if (change.kind === 'set') {
         expectedBefore[change.issueKey] = change.fromSeconds;
-        builder.applySet(change);
+        if (isSick(change)) {
+          builder.placeSickLeave(change);
+        } else {
+          builder.applySet(change);
+        }
       } else {
         builder.applyMove(change);
       }

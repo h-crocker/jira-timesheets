@@ -138,7 +138,11 @@ JIRA_API_TOKEN=any`.
 **The corrections file** (see `corrections/example.json`; your own files in `corrections/` are
 git-ignored, as they describe your time off) lists, per day, each ticket's hours
 before and after (`set`) or time to move between tickets (`move`), plus protected worklogs (e.g.
-annual leave, by date or comment), tickets known to be locked, comment rewrites and totals to check.
+annual leave, by date or comment), tickets known to be locked, comment rewrites and totals to check. `sickLeave` names the
+sick-leave ticket: on each day it changes, sick leave becomes one uninterrupted worklog at the end
+of the day, fitted round the work once that has been cut. It ends when the day's last worklog used to
+end, or starts when the remaining work ends if that would overlap it. Sick leave split over several
+worklogs is merged into one (the extras are deleted once the one kept holds all the time).
 Hours are quarter hours. Dates are days in your Jira profile's time zone, which is what Jira shows.
 
 **`plan`** reads your worklogs and shows, for every day, each worklog it would edit, create or
@@ -153,7 +157,8 @@ worklogs start where the time they replace was freed. Plans are saved in `.times
 
 **`apply`** needs the plan id, and `--allow-deletions` when the plan deletes anything. It backs up
 every worklog on the affected days (raw JSON from Jira) to `.timesheets/backups/` first, and edits
-worklogs in place without sending `started`, so start times and days can't move. Every write sends
+worklogs in place. Work worklogs keep their start times (`started` isn't sent); only sick leave is
+moved, always on the same day. Every write sends
 `adjustEstimate=leave` and `notifyUsers=false`. Every change is either made or recorded: if Jira
 refuses to shorten or delete a worklog (a locked ticket, a closed period), or the worklog changed
 since the plan, that is written to `.timesheets/logs/<planId>-not-changed.md` and the rest of the day

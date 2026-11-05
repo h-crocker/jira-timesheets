@@ -42,10 +42,21 @@ function describeOpBody(op: Op, timeZone: string): string {
   if (op.kind === 'delete') {
     return `**DELETE** ${op.issueKey} worklog ${op.worklogId} · ${timeSpan(start, op.before.seconds, timeZone)} · ${h(op.before.seconds)} · ${quote(op.before.comment)} — ${op.why}`;
   }
+  const newStart = op.after.started === undefined ? start : parseJiraDateTime(op.after.started);
   const parts: string[] = [];
+  if (op.after.started !== undefined) {
+    parts.push(
+      `${timeSpan(start, op.before.seconds, timeZone)} → **${timeSpan(newStart, op.after.seconds, timeZone)}** (moved, same day)`,
+    );
+  } else {
+    parts.push(`starts ${timeSpan(start, op.before.seconds, timeZone).split('–')[0]} (unchanged)`);
+  }
   if (op.after.seconds !== op.before.seconds) {
     parts.push(
-      `${h(op.before.seconds)} → ${h(op.after.seconds)} (ends ${timeSpan(start, op.after.seconds, timeZone).split('–')[1]})`,
+      `${h(op.before.seconds)} → ${h(op.after.seconds)}` +
+        (op.after.started === undefined
+          ? ` (ends ${timeSpan(start, op.after.seconds, timeZone).split('–')[1]})`
+          : ''),
     );
   } else {
     parts.push(h(op.before.seconds));
@@ -55,7 +66,7 @@ function describeOpBody(op: Op, timeZone: string): string {
   } else {
     parts.push(quote(op.before.comment));
   }
-  return `**EDIT** ${op.issueKey} worklog ${op.worklogId} · starts ${timeSpan(start, op.before.seconds, timeZone).split('–')[0]} (unchanged) · ${parts.join(' · ')} — ${op.why}`;
+  return `**EDIT** ${op.issueKey} worklog ${op.worklogId} · ${parts.join(' · ')} — ${op.why}`;
 }
 
 function dayTable(day: PlannedDay): string[] {
@@ -103,7 +114,7 @@ export function renderPlan(plan: Plan, options: { planPath?: string } = {}): str
     '',
     `- ${ready.length} day(s) ready, ${blocked.length} blocked, ${plan.days.length - ready.length - blocked.length} unchanged`,
     `- Ready changes: ${count('update')} edit(s), ${count('delete')} deletion(s), ${count('create')} new worklog(s)`,
-    `- Writes use adjustEstimate=leave and notifyUsers=false; start times of edited worklogs are never sent, so they can't move`,
+    `- Writes use adjustEstimate=leave and notifyUsers=false. Work worklogs keep their start times; only sick leave is moved, on the same day, to end the day as one block`,
     ...plan.checks.map((check) => `- ${check.ok ? '✅' : '❌'} ${check.label}: ${check.detail}`),
     '- If Jira refuses to shorten or delete a worklog, apply records it and carries on: sick leave is still added, even if the day then comes to more than its hours',
     '',

@@ -269,13 +269,14 @@ export class JiraRestClient {
   }
 
   /**
-   * Changes a worklog's time and/or comment. `started` is never sent, so Jira keeps the start time
-   * (and so the day) exactly as it was.
+   * Changes a worklog's time, comment and/or start. `started` is only sent when the worklog is
+   * meant to move (sick leave going to the end of the day); otherwise Jira keeps the start time,
+   * and so the day, exactly as it was.
    */
   updateWorklog(
     issueKey: string,
     worklogId: string,
-    change: { seconds?: number; comment?: string },
+    change: { seconds?: number; comment?: string; started?: string },
   ): Promise<RawWorklog> {
     return this.request<RawWorklog>(
       'PUT',
@@ -284,6 +285,7 @@ export class JiraRestClient {
       {
         ...(change.seconds === undefined ? {} : { timeSpentSeconds: change.seconds }),
         ...(change.comment === undefined ? {} : { comment: toAdf(change.comment) }),
+        ...(change.started === undefined ? {} : { started: change.started }),
       },
     );
   }

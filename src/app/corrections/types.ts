@@ -35,7 +35,8 @@ export interface UpdateOp {
   worklogId: string;
   started: string;
   before: { seconds: number; comment: string };
-  after: { seconds: number; comment: string };
+  /** `started` is only set when the worklog moves (sick leave going to the end of the day). */
+  after: { seconds: number; comment: string; started?: string };
   why: string;
   /** Ops that must have succeeded first: a move only reduces its source once the new time exists. */
   requires?: string[];

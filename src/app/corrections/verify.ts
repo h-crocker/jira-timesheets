@@ -137,8 +137,9 @@ function checkOp(
   if (worklog.seconds !== op.after.seconds || worklog.comment !== op.after.comment) {
     return `${op.issueKey} worklog ${op.worklogId} is ${h(worklog.seconds)} "${worklog.comment}", planned ${h(op.after.seconds)} "${op.after.comment}"`;
   }
-  if (worklog.startedMs !== parseJiraDateTime(op.started)) {
-    return `${op.issueKey} worklog ${op.worklogId} start moved from ${op.started} to ${worklog.started}`;
+  const plannedStart = op.after.started ?? op.started;
+  if (worklog.startedMs !== parseJiraDateTime(plannedStart)) {
+    return `${op.issueKey} worklog ${op.worklogId} starts ${worklog.started}, planned ${plannedStart}`;
   }
   return null;
 }

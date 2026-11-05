@@ -209,17 +209,52 @@ describe('corrections against the mock Jira', () => {
     expect(replanned.days.filter((d) => d.status === 'blocked')).toEqual([]);
   });
 
-  it('keeps edited worklogs on their start time, including one at midnight BST', async () => {
+  it('moves sick leave logged at midnight BST to the end of the same day, and leaves work where it was', async () => {
     await apply(await makePlan());
-    const sick = (await worklogsBetween('2026-07-22', '2026-07-22')).find(
+    const day22 = await worklogsBetween('2026-07-22', '2026-07-22');
+    expect(day22.filter((w) => w.issueKey === 'LEAVE-1')).toEqual([
+      expect.objectContaining({
+        date: '2026-07-22',
+        // Work ends at 13:15, so the 5.25h block starts there rather than overlap it.
+        started: '2026-07-22T13:15:00.000+0100',
+        seconds: 5.25 * H,
+        comment: 'Sick leave',
+      }),
+    ]);
+    // A work worklog that was only shortened keeps its start.
+    const day29 = await worklogsBetween('2026-07-29', '2026-07-29');
+    expect(day29.find((w) => w.issueKey === 'APP-395')).toMatchObject({
+      started: '2026-07-29T13:15:00.000+0100',
+      seconds: 0.5 * H,
+    });
+  });
+
+  it('ends every sick day with one uninterrupted sick-leave worklog after the work', async () => {
+    const plan = await makePlan();
+    await apply(plan);
+    const sickDays = spec.days
+      .filter((d) => d.changes.some((c) => c.kind === 'set' && c.issueKey === 'LEAVE-1'))
+      .map((d) => d.date);
+    expect(sickDays).toHaveLength(7);
+    for (const date of sickDays) {
+      const worklogs = (await worklogsBetween(date, date)).filter((w) => w.date === date);
+      const sick = worklogs.filter((w) => w.issueKey === 'LEAVE-1');
+      expect(`${date}: ${sick.length} sick worklog(s)`).toBe(`${date}: 1 sick worklog(s)`);
+      const sickEnd = sick[0].startedMs + sick[0].seconds * 1000;
+      for (const work of worklogs.filter((w) => w.issueKey !== 'LEAVE-1')) {
+        const workEnd = work.startedMs + work.seconds * 1000;
+        expect(
+          `${date} ${work.issueKey} ends before sick starts: ${workEnd <= sick[0].startedMs}`,
+        ).toBe(`${date} ${work.issueKey} ends before sick starts: true`);
+        expect(workEnd).toBeLessThanOrEqual(sickEnd);
+      }
+    }
+    // Where it fits, the block ends when the day used to: 10 Jun used to end at 17:15.
+    const june10 = (await worklogsBetween('2026-06-10', '2026-06-10')).find(
       (w) => w.issueKey === 'LEAVE-1',
     );
-    expect(sick).toMatchObject({
-      date: '2026-07-22',
-      started: '2026-07-22T00:00:00.000+0100',
-      seconds: 5.25 * H,
-      comment: 'Sick leave',
-    });
+    expect(june10).toMatchObject({ started: '2026-06-10T13:45:00.000+0100', seconds: 3.5 * H });
+    expect((await verifyNow(plan)).ok).toBe(true);
   });
 
   it('still adds the sick leave when a ticket refuses to be deleted, and logs what was not deleted', async () => {

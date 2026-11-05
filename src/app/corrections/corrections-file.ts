@@ -74,6 +74,11 @@ export interface CorrectionsSpec {
   dayTotals: DayTotalCheck[];
   /** The range checked for over and under hours, leave clashes and locked issues. */
   validate?: { from: string; to: string; leaveIssueKeys: string[] };
+  /**
+   * The sick-leave ticket. Changes to it are logged as one uninterrupted worklog per day at the end
+   * of the day, after the other tickets' hours are adjusted.
+   */
+  sickLeave?: { issueKey: string };
 }
 
 const ISSUE_KEY = /^[A-Z][A-Z0-9_]*-\d+$/;
@@ -367,6 +372,14 @@ export function parseCorrections(raw: unknown): CorrectionsSpec {
       reason: optionalString(item['reason'], `${at}.reason`) ?? '',
     });
   });
+
+  const sickLeave = raw['sickLeave'];
+  if (sickLeave !== undefined) {
+    if (!isRecord(sickLeave)) {
+      fail('sickLeave', 'expected an object like { "issueKey": "ABC-1" }');
+    }
+    spec.sickLeave = { issueKey: issueKey(sickLeave['issueKey'], 'sickLeave.issueKey') };
+  }
 
   const validate = raw['validate'];
   if (validate !== undefined) {

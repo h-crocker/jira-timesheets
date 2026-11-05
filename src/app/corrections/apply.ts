@@ -96,12 +96,13 @@ class Abort extends Error {}
 const h = (seconds: number) => `${Math.round((seconds / 3600) * 100) / 100}h`;
 
 /**
- * Order within a day: what a move creates, then deletions and reductions, then comment-only edits,
- * then additions.
+ * Order within a day: deletions and reductions, then comment-only edits, then additions (sick
+ * leave, and what a move creates), then what has to wait for those: a move's source, and extra
+ * sick-leave worklogs merged into the one kept.
  */
-function rank(op: Op, required: Set<string>): number {
-  if (required.has(op.opId)) {
-    return -1;
+function rank(op: Op): number {
+  if (op.kind !== 'create' && (op.requires ?? []).length > 0) {
+    return 4;
   }
   if (op.kind === 'delete') {
     return 0;
@@ -124,6 +125,9 @@ export function describeOp(op: Op, timeZone: string): string {
       ? [`${h(op.before.seconds)} → ${h(op.after.seconds)}`]
       : []),
     ...(op.after.comment !== op.before.comment ? [`comment → "${op.after.comment}"`] : []),
+    ...(op.after.started !== undefined
+      ? [`moved to ${timeInZone(parseJiraDateTime(op.after.started), timeZone)}`]
+      : []),
   ];
   return `edit ${op.issueKey} worklog ${op.worklogId} ${parts.join(', ')}`;
 }
@@ -293,10 +297,7 @@ export async function applyPlan(
         // Worth knowing, but each change below still checks its own worklog before it is made.
         log({ date: day.date, outcome: 'warning', detail: difference });
       }
-      const required = new Set(
-        day.ops.flatMap((op) => (op.kind === 'create' ? [] : (op.requires ?? []))),
-      );
-      const ordered = [...day.ops].sort((a, b) => rank(a, required) - rank(b, required));
+      const ordered = [...day.ops].sort((a, b) => rank(a) - rank(b));
       const notMade = new Set<string>();
       for (const op of ordered) {
         currentOp = op;
@@ -448,17 +449,27 @@ async function applyOp(
   if (worklog === undefined) {
     throw new Conflict(`${op.issueKey} worklog ${op.worklogId} has gone, so it can't be edited`);
   }
-  if (worklog.seconds === op.after.seconds && worklog.comment === op.after.comment) {
+  const plannedStart = parseJiraDateTime(op.after.started ?? op.started);
+  if (
+    worklog.seconds === op.after.seconds &&
+    worklog.comment === op.after.comment &&
+    worklog.startedMs === plannedStart
+  ) {
     return 'already-applied';
   }
-  if (worklog.seconds !== op.before.seconds || worklog.comment !== op.before.comment) {
+  if (
+    worklog.seconds !== op.before.seconds ||
+    worklog.comment !== op.before.comment ||
+    worklog.startedMs !== parseJiraDateTime(op.started)
+  ) {
     throw new Conflict(
-      `${op.issueKey} worklog ${op.worklogId} is now ${h(worklog.seconds)} "${worklog.comment}", not as planned, so it isn't edited`,
+      `${op.issueKey} worklog ${op.worklogId} is now ${h(worklog.seconds)} "${worklog.comment}" from ${worklog.started}, not as planned, so it isn't edited`,
     );
   }
   await client.updateWorklog(op.issueKey, op.worklogId, {
     ...(op.after.seconds === op.before.seconds ? {} : { seconds: op.after.seconds }),
     ...(op.after.comment === op.before.comment ? {} : { comment: op.after.comment }),
+    ...(op.after.started === undefined ? {} : { started: op.after.started }),
   });
   return 'applied';
 }

@@ -415,6 +415,103 @@ describe('corrections planner', () => {
   });
 });
 
+describe('sick leave at the end of the day', () => {
+  beforeEach(() => (nextId = 1));
+  const sickSpec = (date: string, set: unknown[]) =>
+    spec({ sickLeave: { issueKey: 'LEAVE-1' }, days: [{ date, set }] });
+
+  it('cuts work from the latest worklogs, then ends the day with one sick block at the usual finish', () => {
+    const early = wl('2026-06-10', '09:00', 'APP-1', 2, 'A');
+    const middle = wl('2026-06-10', '11:00', 'APP-2', 1.75, 'B');
+    const late = wl('2026-06-10', '13:45', 'APP-1', 1.5, 'A');
+    const sick = wl('2026-06-10', '15:15', 'LEAVE-1', 2.25, 'Sick');
+    const result = plan(
+      sickSpec('2026-06-10', [
+        { issueKey: 'LEAVE-1', from: 2.25, to: 4.25, comment: 'Sick leave' },
+        { issueKey: 'APP-1', from: 3.5, to: 1.5 },
+      ]),
+      [early, middle, late, sick],
+    );
+    const day = result.days[0];
+    expect(day.status).toBe('ready');
+    expect(day.ops).toEqual([
+      expect.objectContaining({ kind: 'delete', worklogId: late.id }),
+      expect.objectContaining({
+        kind: 'update',
+        worklogId: early.id,
+        after: { seconds: 1.5 * 3600, comment: 'A' },
+      }),
+      expect.objectContaining({
+        kind: 'update',
+        worklogId: sick.id,
+        after: {
+          seconds: 4.25 * 3600,
+          comment: 'Sick leave',
+          started: '2026-06-10T13:15:00.000+0100',
+        },
+      }),
+    ]);
+    expect(day.after.totalSeconds).toBe(7.5 * 3600);
+    expect(day.notes.join(' ')).toContain('13:15–17:30, ending when the day used to end');
+  });
+
+  it('starts the block when the work ends if ending at the usual time would overlap it', () => {
+    const sick = wl('2026-07-20', '13:45', 'LEAVE-1', 3.5, 'Sick leave');
+    const result = plan(
+      sickSpec('2026-07-20', [
+        { issueKey: 'LEAVE-1', from: 3.5, to: 4.75, comment: 'Sick leave' },
+        { issueKey: 'APP-1', from: 1.5, to: 0 },
+      ]),
+      [wl('2026-07-20', '09:00', 'APP-1', 1.5), wl('2026-07-20', '10:30', 'APP-2', 2.75), sick],
+    );
+    expect(result.days[0].ops.find((op) => op.issueKey === 'LEAVE-1')).toMatchObject({
+      after: { seconds: 4.75 * 3600, started: '2026-07-20T13:15:00.000+0100' },
+    });
+    expect(result.days[0].notes.join(' ')).toContain('starts when the remaining work ends');
+  });
+
+  it('merges sick leave split over several worklogs into one, deleting the rest only after', () => {
+    const morning = wl('2026-06-11', '09:00', 'LEAVE-1', 1, 'Sick');
+    const work = wl('2026-06-11', '10:00', 'APP-1', 3.5);
+    const afternoon = wl('2026-06-11', '13:30', 'LEAVE-1', 3, 'Sick');
+    const result = plan(
+      sickSpec('2026-06-11', [
+        { issueKey: 'LEAVE-1', from: 4, to: 5, comment: 'Sick leave' },
+        { issueKey: 'APP-1', from: 3.5, to: 2.5 },
+      ]),
+      [morning, work, afternoon],
+    );
+    const ops = result.days[0].ops;
+    const kept = ops.find((op) => op.kind === 'update' && op.worklogId === afternoon.id);
+    expect(kept).toMatchObject({
+      after: { seconds: 5 * 3600, started: '2026-06-11T12:30:00.000+0100' },
+    });
+    expect(ops.find((op) => op.kind === 'delete')).toMatchObject({
+      worklogId: morning.id,
+      requires: [kept?.opId],
+    });
+    expect(result.days[0].after).toMatchObject({
+      totalSeconds: 7.5 * 3600,
+      byIssue: { 'LEAVE-1': 5 * 3600 },
+    });
+  });
+
+  it('creates the block after the work when there was no sick leave', () => {
+    const result = plan(
+      sickSpec('2026-07-29', [
+        { issueKey: 'LEAVE-1', from: 0, to: 3.75, comment: 'Sick leave' },
+        { issueKey: 'APP-1', from: 4.25, to: 0.5 },
+      ]),
+      [wl('2026-07-29', '09:00', 'APP-2', 3.25), wl('2026-07-29', '13:15', 'APP-1', 4.25)],
+    );
+    expect(result.days[0].ops.find((op) => op.kind === 'create')).toMatchObject({
+      issueKey: 'LEAVE-1',
+      started: '2026-07-29T13:45:00.000+0100',
+      seconds: 3.75 * 3600,
+    });
+  });
+});
+
 describe('corrections file', () => {
   it('rejects mistakes before anything is planned', () => {
     expect(() =>

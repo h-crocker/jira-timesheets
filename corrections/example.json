@@ -3,6 +3,7 @@
   "timeZone": "Europe/London",
   "expectedDayHours": 7.5,
   "maxDayHours": 7.5,
+  "sickLeave": { "issueKey": "LEAVE-1" },
   "lockedIssues": {
     "OPS-9": "Locked; never edit (example)"
   },
